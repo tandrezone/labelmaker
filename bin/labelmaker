@@ -1,0 +1,98 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Command line:
+ *   labelmaker --text="Propylene Glycol" --qty=3ml
+ *   labelmaker --text="Ácido Cítrico" --qty="250 g" --icon=flask --out=citric.png
+ *   labelmaker --text="Glycerin" --qty=10ml --icon=/path/to/icon.png --font-size=36
+ *   labelmaker --text="Glycerin" --qty=10ml --print                 (first X5h/X6h printer found)
+ *   labelmaker --text="Glycerin" --qty=10ml --print=X5h-782D --copies=3
+ *
+ * Icons given by name are looked up in ./icons/ (the current folder).
+ * Printing runs printer/x5h_print.py with Python (py -3 on Windows, python3 elsewhere,
+ * or the command in the LABELMAKER_PYTHON environment variable).
+ */
+
+declare(strict_types=1);
+
+use LabelMaker\LabelMaker;
+
+foreach ([__DIR__ . '/../vendor/autoload.php', __DIR__ . '/../../../autoload.php'] as $autoload) {
+    if (is_file($autoload)) {
+        require $autoload;
+        break;
+    }
+}
+if (!class_exists(LabelMaker::class)) {
+    require __DIR__ . '/../src/LabelMaker.php';
+}
+
+const OPTIONS = [
+    'text', 'qty', 'info', 'info-size', 'info-gap', 'info-spacing', 'date-format', 'icon', 'icon-mode', 'width', 'height', 'font-size',
+    'frame', 'mono', 'dpi', 'font', 'font-heavy', 'out',
+    'density', 'feed', 'copies',
+];
+
+$usage = <<<TXT
+Usage: labelmaker --text="Propylene Glycol" [--qty=3ml] [--icon=NAME|file.png] [--out=label.png]
+         [--info="Packed: {today}" --info="Lot: A12" ...] [--info-size=auto|px] [--date-format=d/m/Y]
+         [--info-gap=auto|px] [--info-spacing=auto|px]
+         [--width=384] [--height=128] [--font-size=auto|px] [--frame=1] [--mono=1]
+         [--icon-mode=auto|alpha|luma] [--dpi=203] [--font=file.ttf] [--font-heavy=file.ttf]
+         [--print[=X5h-782D]] [--density=dark|darkest|super-darkest|even-darker|impossible|...] [--feed=80] [--copies=1]
+       labelmaker --icons [--search=word]      list the icon names
+Put | in the text to force a line break, e.g. --text="Propylene|Glycol"
+Icons: drop, flask, pumpkin, or one of ~3,600 names (apple, carrot, cheese, eco, science ...; see --icons)
+Dates: {today}, {today+3d}, {today+2w}, {today+6m}, {today+1y} in the text, qty or info
+--print sends the label to an X5h/X6h Bluetooth printer (needs Python with bleak and pillow).
+
+TXT;
+
+$in = getopt('', array_merge(['help', 'icons', 'search:', 'print::'], array_map(function (string $o): string {
+    return $o . ':';
+}, OPTIONS))) ?: [];
+if (isset($in['icons'])) {
+    $search = strtolower((string)($in['search'] ?? ''));
+    foreach (LabelMaker::iconNames() as $name) {
+        if ($search === '' || strpos($name, $search) !== false) {
+            echo $name, "\n";
+        }
+    }
+    exit(0);
+}
+if (isset($in['help']) || !isset($in['text'])) {
+    echo $usage;
+    exit(isset($in['help']) ? 0 : 1);
+}
+
+$last = function ($value): string {
+    return (string)(is_array($value) ? end($value) : $value);
+};
+$out = $last($in['out'] ?? 'label.png');
+$print = array_key_exists('print', $in) ? $in['print'] : null;   // false = --print without a name
+$printOptions = array_map($last, array_intersect_key($in, array_flip(['density', 'feed', 'copies'])));
+unset($in['out'], $in['print'], $in['density'], $in['feed'], $in['copies']);
+
+try {
+    $maker = new LabelMaker(getcwd() . '/icons');
+    $maker->save($out, $in);
+    [$w, $h] = getimagesize($out) ?: [0, 0];
+    echo "Saved $out ({$w}x{$h} px)\n";
+} catch (Throwable $e) {
+    fwrite(STDERR, 'Error: ' . $e->getMessage() . "\n");
+    exit(1);
+}
+
+if ($print !== null) {
+    $python = getenv('LABELMAKER_PYTHON') ?: (PHP_OS_FAMILY === 'Windows' ? 'py -3' : 'python3');
+    $cmd = $python . ' ' . escapeshellarg(dirname(__DIR__) . '/printer/x5h_print.py') . ' ' . escapeshellarg($out);
+    $name = $print === false ? '' : $last($print);
+    if ($name !== '') {
+        $cmd .= ' --printer ' . escapeshellarg($name);
+    }
+    foreach ($printOptions as $key => $value) {
+        $cmd .= " --$key " . escapeshellarg($value);
+    }
+    passthru($cmd, $code);
+    exit($code);
+}

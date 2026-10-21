@@ -1,0 +1,23 @@
+{
+    "name": "tiagoandre/labelmaker",
+    "description": "Small thermal-printer labels (product name, quantity tag, icon) as crisp 1-bit PNGs with PHP + GD",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["label", "thermal printer", "png", "gd"],
+    "authors": [
+        {
+            "name": "Tiago Andre",
+            "email": "tiago.andre@javra.com"
+        }
+    ],
+    "require": {
+        "php": ">=7.4",
+        "ext-gd": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "LabelMaker\\": "src/"
+        }
+    },
+    "bin": ["bin/labelmaker"]
+}

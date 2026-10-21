@@ -1,0 +1,610 @@
+<!doctype html>
+<!--
+  Label printer page: design a label (drawn by label.php) and print it on an
+  X5h / X6h Bluetooth thermal printer straight from Chrome or Edge (Web Bluetooth).
+
+  Run:  php -S localhost:8000 -t examples   then open http://localhost:8000
+  (Web Bluetooth only works on localhost or https, and not in Firefox or Safari.)
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Label printer</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --card: #ffffff; --text: #1d1d1b; --muted: #6b6b66;
+    --line: #dddcd6; --accent: #1d1d1b; --accent-text: #ffffff; --error: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --card: #20201f; --text: #eeeeea; --muted: #a3a39c;
+      --line: #3a3a37; --accent: #eeeeea; --accent-text: #161615; --error: #f2847c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .wide { grid-column: 1 / -1; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); font-size: 15px; }
+  input, select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+                  border-radius: 6px; padding: 7px 9px; width: 100%; }
+  input[type=checkbox] { width: auto; }
+  .preview { display: flex; justify-content: center; padding: 12px; background: #fff; border-radius: 6px; min-height: 80px; }
+  .preview img { max-width: 100%; image-rendering: pixelated; }
+  .preview img:not([src]) { display: none; }
+  .buttons { display: flex; gap: 8px; margin-top: 12px; }
+  button { font: inherit; padding: 9px 16px; border-radius: 6px; cursor: pointer;
+           border: 1px solid var(--accent); background: transparent; color: var(--text); }
+  button.primary { background: var(--accent); color: var(--accent-text); }
+  button:disabled { opacity: .4; cursor: default; }
+  .status { margin: 10px 0 0; font-size: 13px; color: var(--muted); min-height: 1.45em; }
+  .status.error { color: var(--error); }
+  @font-face { font-family: 'Material Icons'; src: url('icons.php?font=material') format('truetype'); font-display: block; }
+  @font-face { font-family: 'Label Emoji'; src: url('icons.php?font=emoji') format('truetype'); font-display: block; }
+  .caption { font-size: 13px; color: var(--muted); }
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+  .head select, .head input { width: auto; flex: 0 1 220px; padding: 5px 8px; }
+  .info-row { display: flex; gap: 6px; margin-bottom: 6px; }
+  .small { padding: 4px 10px; border-color: var(--line); color: var(--muted); }
+  .icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 4px;
+           max-height: 196px; overflow-y: auto; padding: 2px; }
+  .icons button { padding: 0; height: 44px; border-color: var(--line); display: flex; align-items: center; justify-content: center; }
+  .icons button.selected { border: 2px solid var(--accent); background: var(--bg); }
+  .glyph { font-size: 26px; line-height: 1; color: var(--text); }
+  .glyph.material { font-family: 'Material Icons'; }
+  .glyph.emoji { font-family: 'Label Emoji'; font-size: 24px; }
+  .icons img { width: 28px; height: 28px; }
+  @media (prefers-color-scheme: dark) { .icons img { filter: invert(1); } }
+  .head .search { display: flex; gap: 6px; flex: 0 1 340px; }
+  .head .search select, .head .search input { flex: 1 1 0; min-width: 0; }
+  .icons .none { font-size: 12px; color: var(--muted); }
+  .more { grid-column: 1 / -1; font-size: 12px; color: var(--muted); padding: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Label printer</h1>
+
+  <form id="label" class="card grid" autocomplete="off">
+    <label class="wide">Name <input name="text" value="" required></label>
+    <label>Quantity <input name="qty" value="3ml"></label>
+    <label>Font size (px) <input name="font-size" type="number" min="0" max="400" placeholder="auto"></label>
+
+    <div class="wide">
+      <div class="head">
+        <span class="caption">Info lines</span>
+        <select id="addInfo" aria-label="Add an info line">
+          <option value="">+ Add line…</option>
+          <option value="packed">Packed: today</option>
+          <option value="exp">Expires: in 1 year</option>
+          <option value="best">Best before: in 6 months</option>
+          <option value="opened">Opened: today</option>
+          <option value="lot">Lot</option>
+          <option value="batch">Batch</option>
+          <option value="fridge">Keep refrigerated</option>
+          <option value="dry">Store in a cool, dry place</option>
+          <option value="custom">Empty line</option>
+        </select>
+      </div>
+      <div id="infoList"></div>
+    </div>
+    <label>Info size (px) <input name="info-size" type="number" min="0" max="400" placeholder="auto"></label>
+    <label>Height (px) <input name="height" type="number" value="128" min="32" max="2400"></label>
+    <label>Space after name (px) <input name="info-gap" type="number" min="0" max="400" placeholder="auto"></label>
+    <label>Space between info lines (px) <input name="info-spacing" type="number" min="0" max="400" placeholder="auto"></label>
+
+    <div class="wide">
+      <div class="head">
+        <span class="caption">Icon</span>
+        <div class="search">
+          <select id="iconGroup" aria-label="Icon group">
+            <option value="fruit">Fruit</option>
+            <option value="veg">Vegetables, nuts, herbs</option>
+            <option value="food">Food & drink</option>
+            <option value="care">Lab, care & cleaning</option>
+            <option value="storage">Storage & warnings</option>
+          </select>
+          <input id="iconSearch" type="search" placeholder="Search all…" aria-label="Search icons">
+        </div>
+      </div>
+      <div id="iconGrid" class="icons"></div>
+      <input type="hidden" name="icon" value="">
+    </div>
+    <label class="check"><input type="checkbox" name="frame" checked> Frame</label>
+  </form>
+
+  <div class="card">
+    <div class="preview"><img id="preview" alt="Label preview"></div>
+    <p id="labelStatus" class="status"></p>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <label>Density
+        <select id="density">
+          <option value="light">Light</option>
+          <option value="normal">Normal</option>
+          <option value="dark" selected>Dark</option>
+          <option value="darkest">Darkest</option>
+          <option value="super-darkest">Super darkest (slower)</option>
+          <option value="even-darker">Even darker (slower, bolder)</option>
+          <option value="impossible">Impossible (slowest, boldest)</option>
+        </select>
+      </label>
+      <label>Copies <input id="copies" type="number" value="1" min="1" max="50"></label>
+      <label>Feed after (dots, 8 = 1 mm) <input id="feed" type="number" value="80" min="0" max="1000"></label>
+    </div>
+    <div class="buttons">
+      <button id="connect" type="button">Connect printer</button>
+      <button id="print" type="button" class="primary" disabled>Print</button>
+    </div>
+    <p id="printStatus" class="status"></p>
+  </div>
+</main>
+
+<script>
+// ---- X5h / X6h protocol ("cat printer" family) -------------------------------
+// BLE service AE30, write to AE01, notifications on AE02. Every command is
+//   51 78 <cmd> 00 <length lo> <length hi> <payload> <crc8 of payload> FF
+// and every row is 48 bytes = 384 dots, bit (x % 8) of byte (x >> 3) = dot x, 1 = black.
+
+const WIDTH = 384;
+const SERVICE = 0xae30;
+const WRITE_CHARS = [0xae01, 0xae03];
+const NOTIFY_CHAR = 0xae02;
+// [heating energy, print quality, ms between rows, print speed, extra stroke px] per density.
+// More energy = darker, but 0xffff is the most the printer takes; past "darkest" the print
+// speed command slows the paper down (more heat per row; null = the printer's own speed)
+// and the black parts get thicker (white parts, like the text in the tag, get thinner).
+const DENSITY = {
+  light: [0x4000, 0x25, 15, null, 0],
+  normal: [0x8000, 0x35, 20, null, 0],
+  dark: [0xc000, 0x45, 25, null, 0],
+  darkest: [0xffff, 0x55, 30, null, 0],
+  'super-darkest': [0xffff, 0x55, 40, 45, 0],
+  'even-darker': [0xffff, 0x55, 40, 45, 1],
+  impossible: [0xffff, 0x55, 50, 60, 2],
+};
+const LATTICE_START = [0xaa, 0x55, 0x17, 0x38, 0x44, 0x5f, 0x5f, 0x5f, 0x44, 0x38, 0x2c];
+const LATTICE_END = [0xaa, 0x55, 0x17, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x17];
+
+function crc8(bytes) {
+  let crc = 0;
+  for (const b of bytes) {
+    crc ^= b;
+    for (let i = 0; i < 8; i++) crc = crc & 0x80 ? ((crc << 1) ^ 0x07) & 0xff : (crc << 1) & 0xff;
+  }
+  return crc;
+}
+
+function packet(cmd, payload = []) {
+  const n = payload.length;
+  return Uint8Array.from([0x51, 0x78, cmd, 0x00, n & 0xff, n >> 8, ...payload, crc8(payload), 0xff]);
+}
+
+const u16 = v => [v & 0xff, (v >> 8) & 0xff];
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/** The label picture as printer rows. Wider than 384 dots is scaled down, narrower is centred. */
+async function imageRows(blob) {
+  const bmp = await createImageBitmap(blob);
+  const scale = Math.min(1, WIDTH / bmp.width);
+  const w = Math.round(bmp.width * scale);
+  const h = Math.round(bmp.height * scale);
+  const canvas = document.createElement('canvas');
+  canvas.width = WIDTH;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, WIDTH, h);
+  ctx.drawImage(bmp, (WIDTH - w) >> 1, 0, w, h);
+  const px = ctx.getImageData(0, 0, WIDTH, h).data;
+  const rows = [];
+  for (let y = 0; y < h; y++) {
+    const row = new Array(WIDTH / 8).fill(0);
+    for (let x = 0; x < WIDTH; x++) {
+      const i = (y * WIDTH + x) * 4;
+      if (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2] < 128) row[x >> 3] |= 1 << (x & 7);
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+/** Makes black lines and text px dots thicker: grows them right and down, then left and up. */
+function bolden(rows, px) {
+  if (px <= 0 || rows.length === 0) return rows;
+  const mask = (1n << BigInt(WIDTH)) - 1n;
+  // bit x = dot x (byte 0 is the lowest)
+  let vals = rows.map(row => row.reduceRight((v, b) => (v << 8n) | BigInt(b), 0n));
+  for (let k = 0; k < px; k++) {
+    if (k % 2 === 0) {
+      vals = vals.map(v => (v | (v << 1n)) & mask);
+      vals = vals.map((v, i) => v | (vals[i - 1] ?? 0n));
+    } else {
+      vals = vals.map(v => v | (v >> 1n));
+      vals = vals.map((v, i) => v | (vals[i + 1] ?? 0n));
+    }
+  }
+  return vals.map(v => {
+    const row = new Array(WIDTH / 8);
+    for (let i = 0; i < row.length; i++) {
+      row[i] = Number(v & 0xffn);
+      v >>= 8n;
+    }
+    return row;
+  });
+}
+
+function printJob(rows, density, feed, copies) {
+  const [energy, quality, , speed, bold] = DENSITY[density];
+  rows = bolden(rows, bold);
+  const job = [
+    packet(0xa3, [0]),            // get state
+    packet(0xa4, [quality]),      // print quality
+    packet(0xa6, LATTICE_START),
+    packet(0xaf, u16(energy)),    // heating energy
+    packet(0xbe, [0]),            // image mode (not text)
+  ];
+  if (speed !== null) job.push(packet(0xbd, [speed]));   // print speed: higher = slower
+  for (let c = 0; c < copies; c++) rows.forEach(row => job.push(packet(0xa2, row)));
+  job.push(packet(0xa1, u16(feed)), packet(0xa6, LATTICE_END), packet(0xa3, [0]));
+  return job;
+}
+
+// ---- Bluetooth --------------------------------------------------------------
+
+let device = null;
+let writeChar = null;
+let notifyChar = null;
+let paused = false;   // the printer asks us to wait when its buffer is full
+
+function onNotify(event) {
+  const v = event.target.value;
+  const d = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+  if (d.length >= 7 && d[0] === 0x51 && d[1] === 0x78 && d[2] === 0xae) paused = d[6] === 0x10;
+}
+
+async function openPrinter() {
+  const server = await device.gatt.connect();
+  const service = await server.getPrimaryService(SERVICE);
+  writeChar = null;
+  for (const uuid of WRITE_CHARS) {
+    try { writeChar = await service.getCharacteristic(uuid); break; } catch (e) { /* try the next one */ }
+  }
+  if (!writeChar) throw new Error('This printer has no AE01/AE03 characteristic: it may use another protocol.');
+  if (notifyChar) notifyChar.removeEventListener('characteristicvaluechanged', onNotify);
+  try {
+    notifyChar = await service.getCharacteristic(NOTIFY_CHAR);
+    await notifyChar.startNotifications();
+    notifyChar.addEventListener('characteristicvaluechanged', onNotify);
+  } catch (e) {
+    notifyChar = null;   // no flow control; the row delay keeps the pace slow enough
+  }
+  paused = false;
+}
+
+async function write(data) {
+  const started = Date.now();
+  while (paused) {
+    if (Date.now() - started > 15000) throw new Error('The printer stopped answering (out of paper or cover open?)');
+    await sleep(20);
+  }
+  if (writeChar.properties.writeWithoutResponse) await writeChar.writeValueWithoutResponse(data);
+  else await writeChar.writeValueWithResponse(data);
+}
+
+// ---- Page -------------------------------------------------------------------
+
+const $ = id => document.getElementById(id);
+const form = $('label');
+let labelBlob = null;
+let previewTimer = 0;
+let printing = false;
+
+function setStatus(el, text, isError = false) {
+  el.textContent = text;
+  el.classList.toggle('error', isError);
+}
+
+function updateButtons() {
+  $('print').disabled = printing || !labelBlob || !device;
+  $('connect').disabled = printing;
+}
+
+function labelUrl() {
+  const q = new URLSearchParams({ width: WIDTH, frame: form.frame.checked ? '1' : '0' });
+  for (const name of ['text', 'qty', 'icon', 'font-size', 'info-size', 'info-gap', 'info-spacing', 'height']) {
+    const value = form.elements[name].value.trim();
+    if (value !== '') q.set(name, value);
+  }
+  for (const input of $('infoList').querySelectorAll('input')) {
+    if (input.value.trim() !== '') q.append('info[]', input.value.trim());
+  }
+  return 'label.php?' + q;
+}
+
+function schedulePreview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(refreshPreview, 250);
+}
+
+// ---- Info lines -------------------------------------------------------------
+
+const MAX_INFO = 8;
+
+function dateFromToday({ days = 0, months = 0, years = 0 } = {}) {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() + years, d.getMonth() + months, d.getDate() + days);
+  return d.toLocaleDateString('en-GB');   // dd/mm/yyyy
+}
+
+const INFO_PRESETS = {
+  packed: () => `Packed: ${dateFromToday()}`,
+  exp: () => `Exp: ${dateFromToday({ years: 1 })}`,
+  best: () => `Best before: ${dateFromToday({ months: 6 })}`,
+  opened: () => `Opened: ${dateFromToday()}`,
+  lot: () => 'Lot: ',
+  batch: () => 'Batch: ',
+  fridge: () => 'Keep refrigerated',
+  dry: () => 'Store in a cool, dry place',
+  custom: () => '',
+};
+
+function addInfoLine(text, focus = true) {
+  const list = $('infoList');
+  if (list.children.length >= MAX_INFO) return;
+  const row = document.createElement('div');
+  row.className = 'info-row';
+  const input = document.createElement('input');
+  input.value = text;
+  input.maxLength = 80;
+  input.setAttribute('aria-label', 'Info line');
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'small';
+  remove.textContent = '✕';
+  remove.setAttribute('aria-label', 'Remove line');
+  remove.addEventListener('click', () => { row.remove(); updateInfoControls(); schedulePreview(); });
+  row.append(input, remove);
+  list.append(row);
+  updateInfoControls();
+  if (focus) {
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+}
+
+function updateInfoControls() {
+  $('addInfo').disabled = $('infoList').children.length >= MAX_INFO;
+}
+
+$('addInfo').addEventListener('change', e => {
+  const preset = INFO_PRESETS[e.target.value];
+  e.target.value = '';
+  if (preset) {
+    addInfoLine(preset());
+    schedulePreview();
+  }
+});
+
+// ---- Icon picker ------------------------------------------------------------
+
+// Names that do not exist are skipped, so the lists can be generous
+const ICON_GROUPS = {
+  fruit: [
+    'apple', 'green_apple', 'pear', 'orange', 'lemon', 'banana', 'watermelon', 'melon', 'grapes',
+    'strawberry', 'blueberries', 'cherries', 'peach', 'mango', 'pineapple', 'coconut', 'kiwi', 'tomato',
+    'olive', 'avocado', 'pumpkin', 'jack_o_lantern',
+  ],
+  veg: [
+    'pumpkin', 'carrot', 'corn', 'chili', 'pepper', 'cucumber', 'broccoli', 'leafy_green', 'garlic', 'onion',
+    'potato', 'sweet_potato', 'eggplant', 'mushroom', 'ginger', 'peas', 'beans', 'nuts', 'chestnut',
+    'herb', 'seedling', 'sheaf_of_rice','four_leaf_clover', 'eco', 'spa', 'grass', 'local_florist',
+    'hibiscus', 'sunflower', 'tulip', 'rose', 'blossom', 'cherry_blossom', 'cactus', 'evergreen_tree', 'maple_leaf',
+  ],
+  food: [
+    'bread', 'croissant', 'baguette_bread', 'flatbread', 'pretzel', 'bagel', 'pancakes', 'waffle', 'cheese',
+    'egg_emoji', 'butter', 'milk', 'honey', 'salt', 'cooked_rice', 'spaghetti', 'canned_food', 'fish',
+    'shrimp', 'poultry_leg', 'meat_on_bone', 'cut_of_meat', 'bacon', 'cookie', 'chocolate_bar', 'candy',
+    'lollipop', 'custard', 'cupcake', 'shortcake', 'doughnut', 'soft_ice_cream', 'hot_beverage',
+    'teacup_without_handle', 'teapot', 'mate', 'bubble_tea', 'beverage_box', 'wine_glass', 'beer_mug',
+    'bottle_with_popping_cork', 'baby_bottle', 'jar', 'spoon', 'fork_and_knife', 'kitchen', 'restaurant',
+  ],
+  care: [
+    'drop', 'water_drop', 'flask', 'science', 'biotech', 'test_tube', 'petri_dish', 'dna', 'microscope',
+    'alembic', 'lotion_bottle', 'soap', 'sponge', 'sanitizer', 'clean_hands', 'cleaning_services', 'bubbles',
+    'candle', 'medication', 'pill', 'vaccines', 'healing', 'adhesive_bandage', 'local_pharmacy', 'face',
+    'child_care', 'pets', 'paw_prints', 'toothbrush', 'razor', 'nail_polish', 'lipstick', 'spa',
+  ],
+  storage: [
+    'ac_unit', 'snowflake', 'thermostat', 'thermometer', 'local_fire_department', 'fire', 'sun', 'light_mode',
+    'droplet', 'umbrella', 'warning', 'dangerous', 'skull_and_crossbones', 'biohazard', 'radioactive',
+    'no_entry', 'recycling', 'recycling_symbol', 'schedule', 'event', 'calendar', 'hourglass_not_done',
+    'inventory_2', 'package', 'scale', 'balance_scale', 'lock', 'key', 'star', 'favorite', 'bolt',
+  ],
+};
+const MAX_SHOWN = 160;
+let icons = {};   // name -> { set: 'builtin' | 'emoji' | 'material', code }
+
+function iconButton(name) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.title = name ? name.replace(/_/g, ' ') : 'No icon';
+  b.dataset.name = name;
+  b.classList.toggle('selected', form.icon.value === name);
+  const icon = icons[name];
+  if (!icon) {
+    const span = document.createElement('span');
+    span.className = 'none';
+    span.textContent = 'None';
+    b.append(span);
+  } else if (icon.set === 'builtin') {
+    const img = document.createElement('img');
+    img.src = `icons.php?icon=${encodeURIComponent(name)}&size=56`;
+    img.alt = '';
+    b.append(img);
+  } else {
+    const span = document.createElement('span');
+    span.className = `glyph ${icon.set}`;
+    span.textContent = String.fromCodePoint(parseInt(icon.code, 16));
+    b.append(span);
+  }
+  return b;
+}
+
+function showIcons() {
+  const grid = $('iconGrid');
+  const search = $('iconSearch').value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const names = search === ''
+    ? ICON_GROUPS[$('iconGroup').value].filter(n => n in icons)
+    : Object.keys(icons).filter(n => n.includes(search));
+  const selected = form.icon.value;
+  if (selected && !names.includes(selected) && selected in icons) names.unshift(selected);
+  grid.replaceChildren(iconButton(''));
+  for (const name of names.slice(0, MAX_SHOWN)) {
+    grid.append(iconButton(name));
+  }
+  if (names.length > MAX_SHOWN) {
+    const more = document.createElement('div');
+    more.className = 'more';
+    more.textContent = `${names.length - MAX_SHOWN} more: type more of the name to narrow it down`;
+    grid.append(more);
+  } else if (names.length === 0) {
+    const more = document.createElement('div');
+    more.className = 'more';
+    more.textContent = 'No icon with that name (search in English, e.g. apple, leaf, fire, snow)';
+    grid.append(more);
+  }
+}
+
+$('iconGrid').addEventListener('click', e => {
+  const button = e.target.closest('button');
+  if (!button) return;
+  form.icon.value = button.dataset.name;
+  for (const b of $('iconGrid').querySelectorAll('button')) b.classList.toggle('selected', b === button);
+  schedulePreview();
+});
+
+$('iconSearch').addEventListener('input', showIcons);
+$('iconGroup').addEventListener('change', () => {
+  $('iconSearch').value = '';
+  showIcons();
+});
+
+async function loadIcons() {
+  icons = {};
+  let problem = '';
+  try {
+    // no-cache: an older icons.php let browsers keep its (different) list for a day
+    const res = await fetch('icons.php', { cache: 'no-cache' });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    if (!data.emoji && !data.material) throw new Error('icons.php sent an unexpected list');
+    // Same order as the label maker: built-in first, then emoji, then Material Icons
+    for (const name of Object.values(data.builtin || {})) icons[name] = { set: 'builtin' };
+    for (const set of ['emoji', 'material']) {
+      for (const [name, code] of Object.entries(data[set] || {})) {
+        if (!(name in icons)) icons[name] = { set, code };
+      }
+    }
+  } catch (e) {
+    problem = `Could not load the icons: ${e.message}`;
+  }
+  showIcons();
+  if (problem) {
+    const note = document.createElement('div');
+    note.className = 'more';
+    note.textContent = problem;
+    $('iconGrid').append(note);
+  }
+}
+
+async function refreshPreview() {
+  if (form.elements.text.value.trim() === '') {
+    labelBlob = null;
+    $('preview').removeAttribute('src');
+    setStatus($('labelStatus'), 'Type a name to see the label');
+    updateButtons();
+    return;
+  }
+  try {
+    const res = await fetch(labelUrl());
+    if (!res.ok) throw new Error(await res.text());
+    labelBlob = await res.blob();
+    const old = $('preview').src;
+    $('preview').src = URL.createObjectURL(labelBlob);
+    if (old.startsWith('blob:')) URL.revokeObjectURL(old);
+    setStatus($('labelStatus'), '');
+  } catch (e) {
+    labelBlob = null;
+    setStatus($('labelStatus'), e.message, true);
+  }
+  updateButtons();
+}
+
+form.addEventListener('input', e => {
+  if (e.target.id !== 'iconSearch' && e.target.id !== 'iconGroup') schedulePreview();
+});
+form.addEventListener('submit', e => e.preventDefault());
+
+$('connect').addEventListener('click', async () => {
+  const status = $('printStatus');
+  if (!navigator.bluetooth) {
+    setStatus(status, 'This browser has no Web Bluetooth. Use Chrome or Edge, on localhost or https.', true);
+    return;
+  }
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'X5' }, { namePrefix: 'X6' }, { services: [SERVICE] }],
+      optionalServices: [SERVICE],
+    });
+    device.addEventListener('gattserverdisconnected', () => setStatus(status, `${device.name} disconnected`));
+    setStatus(status, `Connecting to ${device.name}…`);
+    await openPrinter();
+    setStatus(status, `Connected to ${device.name}`);
+  } catch (e) {
+    if (e.name !== 'NotFoundError') setStatus(status, e.message, true);   // NotFoundError = chooser cancelled
+  }
+  updateButtons();
+});
+
+$('print').addEventListener('click', async () => {
+  const status = $('printStatus');
+  printing = true;
+  updateButtons();
+  try {
+    if (!device.gatt.connected) {
+      setStatus(status, `Reconnecting to ${device.name}…`);
+      await openPrinter();
+    }
+    const rows = await imageRows(labelBlob);
+    const copies = Math.max(1, Math.min(50, parseInt($('copies').value, 10) || 1));
+    const feed = Math.max(0, Math.min(1000, parseInt($('feed').value, 10) || 0));
+    const density = $('density').value;
+    const job = printJob(rows, density, feed, copies);
+    for (let i = 0; i < job.length; i++) {
+      await write(job[i]);
+      await sleep(DENSITY[density][2]);
+      if (i % 16 === 0) setStatus(status, `Printing… ${Math.round(100 * i / job.length)}%`);
+    }
+    await sleep(1500);   // let it finish printing and feeding
+    setStatus(status, `Printed on ${device.name}`);
+  } catch (e) {
+    setStatus(status, e.message, true);
+  }
+  printing = false;
+  updateButtons();
+});
+
+addInfoLine(INFO_PRESETS.packed(), false);
+loadIcons();
+refreshPreview();
+</script>
+</body>
+</html>
