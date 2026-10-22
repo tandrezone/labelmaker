@@ -2,3 +2,4 @@
 /composer.lock
 *.png
 !/icons/*.png
+/printer/.venv/
