@@ -28,7 +28,7 @@ if (!class_exists(LabelMaker::class)) {
 }
 
 const OPTIONS = [
-    'text', 'qty', 'info', 'info-size', 'info-gap', 'info-spacing', 'date-format', 'icon', 'icon-mode', 'width', 'height', 'font-size',
+    'text', 'qty', 'info', 'info-size', 'info-gap', 'info-spacing', 'date-format', 'icon', 'icon-mode', 'barcode', 'footer', 'width', 'height', 'font-size',
     'frame', 'mono', 'dpi', 'font', 'font-heavy', 'out',
     'density', 'feed', 'copies',
 ];
@@ -36,7 +36,7 @@ const OPTIONS = [
 $usage = <<<TXT
 Usage: labelmaker --text="Propylene Glycol" [--qty=3ml] [--icon=NAME|file.png] [--out=label.png]
          [--info="Packed: {today}" --info="Lot: A12" ...] [--info-size=auto|px] [--date-format=d/m/Y]
-         [--info-gap=auto|px] [--info-spacing=auto|px]
+         [--info-gap=auto|px] [--info-spacing=auto|px] [--barcode=TEXT] [--footer=TEXT]   (barcode/footer: --height=200 or more)
          [--width=384] [--height=128] [--font-size=auto|px] [--frame=1] [--mono=1]
          [--icon-mode=auto|alpha|luma] [--dpi=203] [--font=file.ttf] [--font-heavy=file.ttf]
          [--print[=X5h-782D]] [--density=dark|darkest|super-darkest|even-darker|impossible|...] [--feed=80] [--copies=1]

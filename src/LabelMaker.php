@@ -26,8 +26,11 @@
  *   info-gap    Space between the name and the info lines in px (auto = 5 px on a 128 px label)
  *   info-spacing Extra space between the info lines in px, kept even when the lines shrink
  *               to fit (auto = 20% of their font size)
+ *   barcode     Code 128 barcode (1-32 letters, digits, punctuation) with its text under it,
+ *               in a band at the bottom. Only on tall labels (height 200 px or more)
+ *   footer      One small centred line at the bottom (tall labels only), e.g. "Keep away from heat"
  *   date-format How {today} is written, as PHP date() letters (default d/m/Y)
- *               In text, qty and info: {today} = today's date, {today+3d} {today+2w}
+ *               In text, qty, info, barcode and footer: {today} = today's date, {today+3d} {today+2w}
  *               {today+6m} {today+1y} = days/weeks/months/years from today (or -)
  *   icon        Built-in icon: drop, flask, pumpkin; or one of ~3,600 icon names (see iconNames()):
  *               food & everything else from Noto Emoji (apple, pear, carrot, garlic, cheese ...)
@@ -38,6 +41,14 @@
  *               alpha = every coloured pixel prints black (icons on a transparent background)
  *               luma  = dark pixels print black (black-on-white pictures, JPGs)
  *               auto  = alpha if the picture has transparency, otherwise luma (default)
+ *   elements    Free layout instead of the automatic one: a JSON list (or PHP array) of boxes placed
+ *               anywhere on the label, so it can hold several texts, icons, quantities, barcodes and QR codes.
+ *               Each box: t = text | icon | qty | barcode | qr | line, x y w h = its box in px from the top
+ *               left, v = the text / icon name / quantity / barcode / QR text, a = l, c or r (alignment),
+ *               s = font size px for text (0 or left out = as big as fits the box), b = 1 for bold.
+ *               [{"t":"icon","x":16,"y":32,"w":64,"h":64,"v":"drop"},{"t":"text","x":96,"y":16,"w":180,"h":96,"v":"Glycerin"},
+ *                {"t":"qty","x":280,"y":32,"w":90,"h":64,"v":"10ml"}]
+ *               With elements, text, qty, info, icon, barcode and footer are not used. 24 boxes max.
  *   width       Label width in px (default 384 = the full print width)
  *   height      Label height in px (default 128, about 16 mm)
  *   font-size   Size of the name in px (0 or auto = as big as fits, the default).
@@ -68,6 +79,13 @@ namespace LabelMaker;
 use InvalidArgumentException;
 use RuntimeException;
 
+if (!class_exists(Code128::class)) {
+    require __DIR__ . '/Code128.php';
+}
+if (!class_exists(Qr::class)) {
+    require __DIR__ . '/Qr.php';
+}
+
 final class LabelMaker
 {
     public const BUILTIN_ICONS = ['drop', 'flask', 'pumpkin'];
@@ -75,7 +93,7 @@ final class LabelMaker
     /** The options a web visitor may set; fonts and file paths stay on the server. */
     public const USER_OPTIONS = [
         'text', 'qty', 'info', 'info-size', 'info-gap', 'info-spacing', 'date-format', 'icon', 'icon-mode',
-        'width', 'height', 'font-size', 'frame', 'mono', 'dpi',
+        'barcode', 'footer', 'elements', 'width', 'height', 'font-size', 'frame', 'mono', 'dpi',
     ];
 
     private const SS               = 4;     // draw 4x bigger, then shrink: smooth curves and text
@@ -83,11 +101,15 @@ final class LabelMaker
     private const INFO_LINE_HEIGHT = 1.2;   // info line spacing, in font sizes
     private const INFO_MAX_SHARE   = 0.5;   // the info lines take at most this part of the height
     private const MONO_THRESHOLD   = 128;   // 0-255: anything darker than this prints black
+    private const MIN_BAND_HEIGHT  = 200;   // barcode and footer need a label at least this tall (px)
+    private const MAX_ELEMENTS     = 24;    // boxes of a free layout
+    private const MIN_HEADER_SHARE = 0.4;   // ...and leave this part of the height to the name
     private const ICON_EXTS        = ['png', 'webp', 'gif', 'jpg', 'jpeg'];
     private const GLYPH_FONTS      = ['emoji' => 'NotoEmoji-Labels', 'material' => 'MaterialIcons-Regular'];
 
     private const DEFAULTS = [
         'text' => '', 'qty' => '', 'info-size' => 'auto', 'info-gap' => 'auto', 'info-spacing' => 'auto', 'date-format' => 'd/m/Y', 'icon' => '', 'icon-mode' => 'auto',
+        'barcode' => '', 'footer' => '',
         'width' => '384', 'height' => '128', 'font-size' => 'auto', 'frame' => '1', 'mono' => '1', 'dpi' => '203',
         'font' => '', 'font-heavy' => '',
     ];
@@ -95,6 +117,7 @@ final class LabelMaker
     private ?string $iconDir;
     private string $fontDir;
     private array $measureCache = [];
+    private array $layout = [];
 
     /**
      * @param string|null $iconDir Folder of picture icons that can be picked by name (icon=leaf -> leaf.png)
@@ -122,6 +145,15 @@ final class LabelMaker
             imageresolution($img, $o['dpi'], $o['dpi']);
         }
         return $img;
+    }
+
+    /**
+     * The sizes (px) the last render() used, including the ones left on auto:
+     * font-size, and with info lines info-size, info-gap, info-spacing.
+     */
+    public function layout(): array
+    {
+        return $this->layout;
     }
 
     /** Draws the label and returns the PNG file contents. */
@@ -209,7 +241,8 @@ final class LabelMaker
             $options = array_intersect_key($options, array_flip(self::USER_OPTIONS));
         }
         $info = $options['info'] ?? [];
-        unset($options['info']);
+        $elements = $options['elements'] ?? '';
+        unset($options['info'], $options['elements']);
         $o = self::DEFAULTS;
         foreach ($options as $key => $value) {
             if (is_array($value)) {
@@ -232,7 +265,8 @@ final class LabelMaker
         };
 
         $text = $clean($o['text']);
-        if (trim(str_replace('|', '', $text)) === '') {
+        $free = is_array($elements) ? $elements !== [] : (is_string($elements) && trim($elements) !== '');
+        if (!$free && trim(str_replace('|', '', $text)) === '') {
             throw new InvalidArgumentException('Missing text (the product name), e.g. --text="Propylene Glycol"');
         }
         if (strlen($text) > 120) {
@@ -259,6 +293,19 @@ final class LabelMaker
         }
         if (count($infoLines) > 8) {
             throw new InvalidArgumentException('Too many info lines (8 max).');
+        }
+        $barcode = trim($o['barcode']) === '' ? '' : self::expandDates(trim($o['barcode']), $dateFormat);
+        if ($barcode !== '') {
+            Code128::widths($barcode);   // rejects what cannot be encoded
+        }
+        $footer = $clean($o['footer']);
+        if (strlen($footer) > 80) {
+            throw new InvalidArgumentException('The footer is too long (80 characters max).');
+        }
+        $width = self::wholeNumber($o['width'], 64, 2400, 'width');
+        $height = self::wholeNumber($o['height'], 32, 2400, 'height');
+        if (!$free && ($barcode !== '' || $footer !== '') && $height < self::MIN_BAND_HEIGHT) {
+            throw new InvalidArgumentException('A barcode or footer needs a taller label (height ' . self::MIN_BAND_HEIGHT . ' px or more).');
         }
         $infoSize = strtolower(trim($o['info-size']));
         $infoSize = in_array($infoSize, ['', 'auto'], true) ? 0 : self::wholeNumber($infoSize, 0, 400, 'info-size');
@@ -290,6 +337,8 @@ final class LabelMaker
         }
 
         return [
+            'free'       => $free,
+            'elements'   => $free ? $this->parseElements($elements, $dateFormat, $untrusted) : [],
             'text'       => $text,
             'qty'        => $qty,
             'info'       => $infoLines,
@@ -298,8 +347,10 @@ final class LabelMaker
             'info-spacing' => $autoOrPx('info-spacing'),
             'icon'       => $this->resolveIcon(trim($o['icon']), $untrusted),
             'icon-mode'  => $mode,
-            'width'      => self::wholeNumber($o['width'], 64, 2400, 'width'),
-            'height'     => self::wholeNumber($o['height'], 32, 2400, 'height'),
+            'barcode'    => $barcode,
+            'footer'     => $footer,
+            'width'      => $width,
+            'height'     => $height,
             'font-size'  => $fontSize,
             'frame'      => self::isOn($o['frame']),
             'mono'       => self::isOn($o['mono']),
@@ -307,6 +358,81 @@ final class LabelMaker
             'font'       => $font,
             'font-heavy' => $heavy,
         ];
+    }
+
+    /** Checks the boxes of a free layout (see the elements option) and cleans their values. */
+    private function parseElements($raw, string $dateFormat, bool $untrusted): array
+    {
+        if (is_string($raw)) {
+            if (strlen($raw) > 20000) {
+                throw new InvalidArgumentException('elements is too long.');
+            }
+            $raw = json_decode($raw, true);
+        }
+        if (!is_array($raw)) {
+            throw new InvalidArgumentException('elements must be a JSON list of boxes.');
+        }
+        if (count($raw) > self::MAX_ELEMENTS) {
+            throw new InvalidArgumentException('Too many elements (' . self::MAX_ELEMENTS . ' max).');
+        }
+        $clean = function ($value) use ($dateFormat): string {
+            return self::expandDates(trim((string)preg_replace('/\s+/u', ' ', is_scalar($value) ? (string)$value : '')), $dateFormat);
+        };
+        $out = [];
+        foreach (array_values($raw) as $i => $e) {
+            $n = $i + 1;
+            if (!is_array($e)) {
+                throw new InvalidArgumentException("Element $n must be an object.");
+            }
+            $type = (string)($e['t'] ?? '');
+            if (!in_array($type, ['text', 'icon', 'qty', 'barcode', 'qr', 'line'], true)) {
+                throw new InvalidArgumentException("Element $n: t must be text, icon, qty, barcode, qr or line.");
+            }
+            $box = [];
+            foreach (['x' => -2400, 'y' => -2400, 'w' => 1, 'h' => 1] as $key => $min) {
+                if (!isset($e[$key]) || !is_numeric($e[$key])) {
+                    throw new InvalidArgumentException("Element $n: $key must be a number.");
+                }
+                $box[$key] = (int)max($min, min(4800, round((float)$e[$key])));
+            }
+            $v = $clean($e['v'] ?? '');
+            $align = (string)($e['a'] ?? 'l');
+            $item = ['type' => $type, 'v' => $v, 'a' => in_array($align, ['l', 'c', 'r'], true) ? $align : 'l'] + $box;
+            if ($type === 'text') {
+                if (strlen($v) > 120) {
+                    throw new InvalidArgumentException("Element $n: the text is too long (120 characters max).");
+                }
+                $size = $e['s'] ?? 0;
+                $item['s'] = is_numeric($size) ? (int)max(0, min(400, $size)) : 0;
+                $item['b'] = !empty($e['b']) && $e['b'] !== '0';
+                if (trim(str_replace('|', '', $v)) === '') {
+                    continue;
+                }
+            } elseif ($type === 'qty') {
+                if (strlen($v) > 24) {
+                    throw new InvalidArgumentException("Element $n: the quantity is too long (24 characters max).");
+                }
+            } elseif ($type === 'barcode') {
+                $v = trim(self::expandDates(trim((string)($e['v'] ?? '')), $dateFormat));
+                if ($v === '') {
+                    continue;
+                }
+                Code128::widths($v);   // rejects what cannot be encoded
+                $item['v'] = $v;
+            } elseif ($type === 'qr') {
+                if ($v === '') {
+                    continue;
+                }
+                Qr::matrix($v);   // rejects what does not fit
+            } elseif ($type === 'icon') {
+                $item['v'] = $this->resolveIcon(trim($v), $untrusted);
+            }
+            if (in_array($type, ['qty', 'icon'], true) && $item['v'] === '') {
+                continue;
+            }
+            $out[] = $item;
+        }
+        return $out;
     }
 
     /** Returns '' (no icon), 'builtin:<name>', 'glyph:<font>:<codepoint>' or the path of an image file. */
@@ -415,30 +541,103 @@ final class LabelMaker
         $img = imagecreatetruecolor($W * self::SS, $H * self::SS);
         imagefilledrectangle($img, 0, 0, $W * self::SS - 1, $H * self::SS - 1, 0xFFFFFF);
 
-        // Frame: a black rounded rectangle with a white one inside it
-        $pad = 6 * $k;
-        $x0 = $pad;
-        $y0 = $pad;
-        $x1 = $W * self::SS - $pad;
-        $y1 = $H * self::SS - $pad;
-        if ($o['frame']) {
-            $border = max(2 * self::SS, round(3 * $k));
-            self::fillRoundRect($img, $x0, $y0, $x1, $y1, 12 * $k, 0x000000);
-            $x0 += $border;
-            $y0 += $border;
-            $x1 -= $border;
-            $y1 -= $border;
-            self::fillRoundRect($img, $x0, $y0, $x1, $y1, max(0, 12 * $k - $border), 0xFFFFFF);
+        $box = $this->drawFrame($img, $o['frame'], $W * self::SS, $H * self::SS, $k);
+        $this->layout = [];
+
+        if ($o['free']) {
+            $this->drawElements($img, $o);
+        } else {
+            // Barcode and footer take a band at the bottom, the header gets the rest
+            $bandHeight = $this->bandHeight($o, $box, $k);
+            $header = $box;
+            $header['y1'] -= $bandHeight;
+            if ($bandHeight > 0) {
+                if (($header['y1'] - $header['y0']) < self::MIN_HEADER_SHARE * ($box['y1'] - $box['y0'])) {
+                    throw new InvalidArgumentException('No room for the barcode and footer: make the label taller.');
+                }
+                $this->drawBand($img, $o, $box, $header['y1'], $k);
+            }
+            $this->drawHeader($img, $o, $header, $k, $H);
         }
 
-        $midY   = ($y0 + $y1) / 2;
-        $left   = $x0 + ($o['icon'] !== '' ? 14 : 18) * $k;
-        $right  = $x1 - 12 * $k;
-        $top    = $y0 + 8 * $k;
-        $bottom = $y1 - 8 * $k;
+        // Shrink to the real size
+        $out = imagecreatetruecolor($W, $H);
+        imagecopyresampled($out, $img, 0, 0, 0, 0, $W, $H, $W * self::SS, $H * self::SS);
+        unset($img);
+
+        return $o['mono'] ? self::toMono($out) : $out;
+    }
+
+    /**
+     * Draws the border (a black rounded rectangle with a white one inside it) and returns the
+     * box inside it as ['x0', 'y0', 'x1', 'y1'] in big pixels.
+     */
+    private function drawFrame($img, bool $frame, int $width, int $height, float $k): array
+    {
+        $pad = 6 * $k;
+        $box = ['x0' => $pad, 'y0' => $pad, 'x1' => $width - $pad, 'y1' => $height - $pad];
+        if (!$frame) {
+            return $box;
+        }
+        $border = max(2 * self::SS, round(3 * $k));
+        self::fillRoundRect($img, $box['x0'], $box['y0'], $box['x1'], $box['y1'], 12 * $k, 0x000000);
+        $box = ['x0' => $box['x0'] + $border, 'y0' => $box['y0'] + $border, 'x1' => $box['x1'] - $border, 'y1' => $box['y1'] - $border];
+        self::fillRoundRect($img, $box['x0'], $box['y0'], $box['x1'], $box['y1'], max(0, 12 * $k - $border), 0xFFFFFF);
+        return $box;
+    }
+
+    /** The boxes of a free layout, in order (later ones on top). */
+    private function drawElements($img, array $o): void
+    {
+        $S = self::SS;
+        foreach ($o['elements'] as $e) {
+            [$x, $y, $w, $h] = [$e['x'] * $S, $e['y'] * $S, $e['w'] * $S, $e['h'] * $S];
+            switch ($e['type']) {
+                case 'line':
+                    imagefilledrectangle($img, (int)round($x), (int)round($y), (int)round($x + $w) - 1, (int)round($y + $h) - 1, 0x000000);
+                    break;
+                case 'icon':
+                    $size = min($w, $h);
+                    $this->drawIcon($img, $e['v'], $o['icon-mode'], $x + ($w - $size) / 2, $y + ($h - $size) / 2, $size);
+                    break;
+                case 'qty':
+                    $this->drawTag($img, $o['font-heavy'], $e['v'], $x + $w, $y + $h / 2, $w, (float)$S, $h, $e['a']);
+                    break;
+                case 'barcode':
+                    $textPx = $h >= 24 * $S ? min(0.28 * $h, 20 * $S) : 0.0;
+                    $bars = $h - $textPx * 1.25;
+                    $this->drawBarcode($img, $e['v'], $x, $x + $w, $y, $bars);
+                    if ($textPx > 0) {
+                        $this->drawCentred($img, $o['font'], $e['v'], $x + $w / 2, $y + $bars + 0.05 * $textPx, $w, $textPx);
+                    }
+                    break;
+                case 'qr':
+                    $this->drawQr($img, $e['v'], $x, $y, $w, $h, $e['a']);
+                    break;
+                default:
+                    $font = $e['b'] ? $o['font-heavy'] : $o['font'];
+                    $name = $this->fitName($font, $e['v'], $w, $h, $e['s'] > 0 ? $e['s'] * $S : $h);
+                    $top = $y + ($h - $name['height']) / 2;
+                    foreach ($name['columns'][0]['lines'] as $i => $line) {
+                        $m = $this->measure($font, $name['pt'], $line);
+                        $left = $e['a'] === 'c' ? $x + ($w - $m['w']) / 2 : ($e['a'] === 'r' ? $x + $w - $m['w'] : $x);
+                        imagettftext($img, $name['pt'], 0, (int)round($left - $m['x']), (int)round($top + $name['asc'] + $i * $name['gap']), 0x000000, $font, $line);
+                    }
+            }
+        }
+    }
+
+    /** The icon, the quantity tag, the name and the info lines inside $box. */
+    private function drawHeader($img, array $o, array $box, float $k, int $H): void
+    {
+        $midY   = ($box['y0'] + $box['y1']) / 2;
+        $left   = $box['x0'] + ($o['icon'] !== '' ? 14 : 18) * $k;
+        $right  = $box['x1'] - 12 * $k;
+        $top    = $box['y0'] + 8 * $k;
+        $bottom = $box['y1'] - 8 * $k;
 
         if ($o['qty'] !== '') {
-            $tagWidth = $this->drawTag($img, $o['font-heavy'], $o['qty'], $right, $midY, 0.45 * ($x1 - $x0), $k);
+            $tagWidth = $this->drawTag($img, $o['font-heavy'], $o['qty'], $right, $midY, 0.45 * ($box['x1'] - $box['x0']), $k);
             $right -= $tagWidth + 12 * $k;
         }
         if ($o['icon'] !== '') {
@@ -465,27 +664,139 @@ final class LabelMaker
         $maxPx = $o['font-size'] > 0 ? $o['font-size'] * self::SS : 0.33 * $H * self::SS;
         $name = $this->fitName($o['font'], $o['text'], $w, $h, $maxPx);
         $y = $top + ($h - $name['height']) / 2;
+        $this->layout['font-size'] = (int)round($name['pt'] / 0.75 / self::SS);
+        if ($info) {
+            $infoEm = $info['pt'] / 0.75;
+            $this->layout += [
+                'info-size'    => (int)round($infoEm / self::SS),
+                'info-gap'     => (int)round($gap / self::SS),
+                'info-spacing' => (int)round(($info['gap'] - $infoEm) / self::SS),
+            ];
+        }
         $this->drawBlock($img, $o['font'], $name, $left, $y);
         if ($info) {
             $this->drawBlock($img, $o['font'], $info, $left, $y + $name['height'] + $gap);
         }
-
-        // Shrink to the real size
-        $out = imagecreatetruecolor($W, $H);
-        imagecopyresampled($out, $img, 0, 0, 0, 0, $W, $H, $W * self::SS, $H * self::SS);
-        unset($img);
-
-        return $o['mono'] ? self::toMono($out) : $out;
     }
 
-    /** The black quantity tag, right-aligned at $right and centred on $midY. Returns its width. */
-    private function drawTag($img, string $font, string $qty, float $right, float $midY, float $maxWidth, float $k): float
+    // The band at the bottom of a tall label, top to bottom: a divider, the barcode with its
+    // text under it, the footer line. Sizes below are in px of the 384 x 128 reference design.
+
+    private function bandHeight(array $o, array $box, float $k): float
+    {
+        if ($o['barcode'] === '' && $o['footer'] === '') {
+            return 0.0;
+        }
+        $height = 10 * $k;                                          // divider and space around it
+        if ($o['barcode'] !== '') {
+            $height += $this->barcodeBarsHeight($box, $k) + 26 * $k;   // bars, their text, space
+        }
+        if ($o['footer'] !== '') {
+            $height += 26 * $k;
+        }
+        return $height;
+    }
+
+    private function barcodeBarsHeight(array $box, float $k): float
+    {
+        return max(40 * $k, min(90 * $k, 0.22 * ($box['y1'] - $box['y0'])));
+    }
+
+    private function drawBand($img, array $o, array $box, float $top, float $k): void
+    {
+        $left = $box['x0'] + 18 * $k;
+        $right = $box['x1'] - 18 * $k;
+        $rule = max(self::SS, (int)round(2 * $k));
+        imagefilledrectangle($img, (int)round($left), (int)round($top), (int)round($right) - 1, (int)round($top) + $rule - 1, 0x000000);
+        $y = $top + 10 * $k;
+
+        if ($o['barcode'] !== '') {
+            $barsHeight = $this->barcodeBarsHeight($box, $k);
+            $this->drawBarcode($img, $o['barcode'], $left, $right, $y, $barsHeight);
+            $this->drawCentred($img, $o['font'], $o['barcode'], ($left + $right) / 2, $y + $barsHeight + 3 * $k, $right - $left, 20 * $k);
+            $y += $barsHeight + 26 * $k;
+        }
+        if ($o['footer'] !== '') {
+            $this->drawCentred($img, $o['font'], $o['footer'], ($left + $right) / 2, $y, $right - $left, 20 * $k);
+        }
+    }
+
+    /**
+     * Code 128 bars between $left and $right. Every module is a whole number of real pixels
+     * wide, so the bars stay sharp after the image is shrunk.
+     */
+    private function drawBarcode($img, string $text, float $left, float $right, float $y, float $height): void
+    {
+        $widths = Code128::widths($text);
+        $modules = array_sum($widths) + 20;          // 10 modules of quiet zone on each side
+        $module = (int)floor(($right - $left) / self::SS / $modules);
+        if ($module < 1) {
+            throw new InvalidArgumentException('The barcode is too long for this label width.');
+        }
+        $unit = $module * self::SS;
+        $x = (int)(round(($left + $right) / 2 / self::SS - $modules * $module / 2) * self::SS) + 10 * $unit;
+        foreach ($widths as $i => $width) {
+            if ($i % 2 === 0) {
+                imagefilledrectangle($img, $x, (int)round($y), $x + $width * $unit - 1, (int)round($y + $height) - 1, 0x000000);
+            }
+            $x += $width * $unit;
+        }
+    }
+
+    /**
+     * A QR code as big as fits the box (aligned $align), with whole pixels per module so the
+     * squares stay sharp after the image is shrunk. It has a 2 module quiet zone.
+     */
+    private function drawQr($img, string $text, float $x, float $y, float $w, float $h, string $align): void
+    {
+        $rows = Qr::matrix($text);
+        $modules = count($rows) + 4;
+        $module = (int)floor(min($w, $h) / self::SS / $modules);
+        if ($module < 1) {
+            throw new InvalidArgumentException('The QR code is too big for its box: make the box larger.');
+        }
+        $unit = $module * self::SS;
+        $side = $modules * $unit;
+        $left = $align === 'r' ? $x + $w - $side : ($align === 'c' ? $x + ($w - $side) / 2 : $x);
+        $x0 = (int)round($left / self::SS) * self::SS + 2 * $unit;
+        $y0 = (int)round(($y + ($h - $side) / 2) / self::SS) * self::SS + 2 * $unit;
+        foreach ($rows as $r => $row) {
+            foreach ($row as $c => $dark) {
+                if ($dark) {
+                    imagefilledrectangle($img, $x0 + $c * $unit, $y0 + $r * $unit, $x0 + ($c + 1) * $unit - 1, $y0 + ($r + 1) * $unit - 1, 0x000000);
+                }
+            }
+        }
+    }
+
+    /** One line of text centred on $cx with its top at $y, shrunk if it is wider than $maxWidth. */
+    private function drawCentred($img, string $font, string $text, float $cx, float $y, float $maxWidth, float $px): void
+    {
+        $pt = self::px2pt($px);
+        $m = $this->measure($font, $pt, $text);
+        if ($m['w'] > $maxWidth) {
+            $pt *= $maxWidth / $m['w'];
+            $m = $this->measure($font, $pt, $text);
+        }
+        imagettftext($img, $pt, 0, (int)round($cx - $m['w'] / 2 - $m['x']), (int)round($y + $m['asc']), 0x000000, $font, $text);
+    }
+
+    /**
+     * The black quantity tag, aligned ($align l, c or r) in the $maxWidth wide box ending at $right
+     * and centred on $midY. With $fitHeight the tag is scaled to be that tall (shrunk if it
+     * would be wider than the box). Returns its width.
+     */
+    private function drawTag($img, string $font, string $qty, float $right, float $midY, float $maxWidth, float $k, ?float $fitHeight = null, string $align = 'r'): float
     {
         // "3ml" -> big "3" + smaller "ml";  "1,5 L" -> "1,5" + "L"
         if (preg_match('/^(\d+(?:[.,]\d+)?)\s*(.*)$/u', $qty, $m)) {
             [$num, $unit] = [$m[1], trim($m[2])];
         } else {
             [$num, $unit] = [$qty, ''];
+        }
+        if ($fitHeight !== null) {
+            $natural = $this->measure($font, self::px2pt(56 * $k), $num)['asc'] + 28 * $k;
+            $k *= $fitHeight / max($natural, 1.0);
         }
         $padX = 12 * $k;
         $padY = 14 * $k;
@@ -509,9 +820,10 @@ final class LabelMaker
 
         $width = $content + 2 * $padX;
         $height = $nm['asc'] + 2 * $padY;
-        $tx = $right - $width;
+        $left = $right - $maxWidth;
+        $tx = $align === 'l' ? $left : ($align === 'c' ? $left + ($maxWidth - $width) / 2 : $right - $width);
         $ty = $midY - $height / 2;
-        self::fillRoundRect($img, $tx, $ty, $right, $ty + $height, 8 * $k, 0x000000);
+        self::fillRoundRect($img, $tx, $ty, $tx + $width, $ty + $height, 8 * $k, 0x000000);
 
         $baseline = (int)round($ty + $padY + $nm['asc']);
         imagettftext($img, $numPt, 0, (int)round($tx + $padX - $nm['x']), $baseline, 0xFFFFFF, $font, $num);

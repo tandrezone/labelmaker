@@ -1,0 +1,30 @@
+{
+  "name": "labelmaker-desktop",
+  "version": "1.0.0",
+  "description": "Offline desktop app for labelmaker: the label page plus Bluetooth printing, no browser or web server needed",
+  "main": "main.js",
+  "author": "Tiago Andre <tiago.andre@javra.com>",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.tiagoandre.labelmaker",
+    "productName": "Label Maker",
+    "files": ["main.js", "package.json"],
+    "extraResources": [
+      { "from": "../src", "to": "site/src" },
+      { "from": "../fonts", "to": "site/fonts" },
+      { "from": "../examples", "to": "site/examples", "filter": ["*.php", "*.html", "icons/**"] },
+      { "from": "php", "to": "php" }
+    ],
+    "win": { "target": "nsis" },
+    "linux": { "target": "AppImage", "category": "Utility" }
+  }
+}

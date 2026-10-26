@@ -17,8 +17,10 @@ if (is_file(__DIR__ . '/../vendor/autoload.php')) {
 }
 
 try {
-    $png = (new LabelMaker(__DIR__ . '/icons'))->png($_GET, true);
+    $maker = new LabelMaker(__DIR__ . '/icons');
+    $png = $maker->png($_GET, true);
     header('Content-Type: image/png');
+    header('X-Label-Layout: ' . json_encode($maker->layout()));
     header('Content-Disposition: inline; filename="label.png"');
     echo $png;
 } catch (Throwable $e) {

@@ -1,7 +1,9 @@
 <!doctype html>
 <!--
-  Label printer page: design a label (drawn by label.php) and print it on an
-  X5h / X6h Bluetooth thermal printer straight from Chrome or Edge (Web Bluetooth).
+  Label printer page: design a label (drawn by label.php), keep labels in collections
+  (folders, saved in this browser), print one label at a time on an X5h / X6h Bluetooth
+  thermal printer straight from Chrome or Edge (Web Bluetooth), or print a batch that
+  fits on one A4 page.
 
   Run:  php -S localhost:8000 -t examples   then open http://localhost:8000
   (Web Bluetooth only works on localhost or https, and not in Firefox or Safari.)
@@ -24,7 +26,8 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; }
-  main { max-width: 560px; margin: 0 auto; padding: 24px 16px 48px; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+  #designerView { max-width: 560px; margin: 0 auto; }
   h1 { font-size: 20px; margin: 0 0 16px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -64,18 +67,203 @@
   .head .search select, .head .search input { flex: 1 1 0; min-width: 0; }
   .icons .none { font-size: 12px; color: var(--muted); }
   .more { grid-column: 1 / -1; font-size: 12px; color: var(--muted); padding: 4px; }
+  .hidden { display: none !important; }
+  .step-title { font-size: 16px; margin: 0 0 4px; }
+  .size-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0; }
+  .size-option { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 14px 8px;
+                 border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text);
+                 cursor: pointer; font: inherit; }
+  .size-option strong { font-size: 15px; }
+  .size-option .size-px, .size-option .size-cm { font-size: 12px; color: var(--muted); }
+  .size-option.selected, .size-option:hover { border-color: var(--accent); border-width: 2px; }
+  .custom-size { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+  .custom-size label { flex: 0 1 160px; }
+  .back-row { margin: 0 0 12px; }
+  .back-row button { padding: 5px 10px; font-size: 13px; }
+  .qty-row { display: flex; gap: 6px; }
+  .qty-row input { flex: 1 1 55%; min-width: 0; }
+  .qty-row select { flex: 1 1 45%; min-width: 0; }
+
+  .tabs { display: flex; gap: 6px; margin: 0 0 16px; }
+  .tabs button { border-color: var(--line); }
+  .tabs button.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .printer-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+  .printer-bar label { flex: 0 1 190px; }
+  .printer-bar .status { flex: 1 1 100%; margin: 0; }
+  .coll-layout { display: grid; grid-template-columns: 220px 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 720px) { .coll-layout { grid-template-columns: 1fr; } }
+  .coll-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .coll-list button { width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 8px; border-color: var(--line); }
+  .coll-list button.active { border: 2px solid var(--accent); background: var(--bg); }
+  .coll-list .count { color: var(--muted); font-size: 13px; }
+  .label-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-top: 12px; }
+  .label-card { border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--bg); position: relative; }
+  .label-card .thumb { background: #fff; border-radius: 4px; display: flex; justify-content: center; align-items: center; min-height: 70px; padding: 6px; }
+  .label-card .thumb img { max-width: 100%; max-height: 160px; image-rendering: pixelated; }
+  .label-card .name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .label-card .size { font-size: 12px; color: var(--muted); }
+  .label-card .actions { display: flex; flex-wrap: wrap; gap: 4px; }
+  .label-card .actions button, .label-card .actions select { padding: 4px 8px; font-size: 12px; width: auto; }
+  .label-card.selectable { cursor: pointer; }
+  .label-card.chosen { border: 2px solid var(--accent); padding: 7px; }
+  .label-card .pick { position: absolute; top: 10px; left: 10px; width: 20px; height: 20px; }
+  .batch-layout { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .batch-layout .grid { flex: 1 1 260px; }
+  .a4 { position: relative; width: 210px; background: #fff; border: 1px solid var(--line); box-shadow: 0 1px 4px rgba(0,0,0,.15); flex: none; }
+  .a4 .slot { position: absolute; overflow: hidden; background: #fff; outline: 1px solid #888; }
+  .a4 .slot img { width: 100%; height: 100%; display: block; }
+  .a4 .slot.ghost { background: transparent; outline: 1px dashed #bbb; }
+  .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+
+  .free-mode .auto-only { display: none !important; }
+  .seg { display: flex; gap: 6px; }
+  .seg button { flex: 1; border-color: var(--line); }
+  .seg button.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .free-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+  .free-bar button { padding: 6px 10px; font-size: 13px; }
+  .free-bar label { flex-direction: row; align-items: center; gap: 6px; }
+  .free-bar select { width: auto; padding: 4px 6px; }
+  .free-bar .spacer { flex: 1; }
+  .stage { position: relative; width: 100%; background: #fff; border: 1px solid var(--line);
+           touch-action: none; user-select: none; -webkit-user-select: none; }
+  .stage img { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; pointer-events: none; }
+  .stage img:not([src]) { display: none; }
+  .stage .grid-lines { position: absolute; inset: 0; pointer-events: none;
+    background-image: linear-gradient(to right, rgba(0,110,255,.22) 1px, transparent 1px),
+                      linear-gradient(to bottom, rgba(0,110,255,.22) 1px, transparent 1px); }
+  .el { position: absolute; outline: 1px dashed rgba(0,110,255,.75); cursor: move; }
+  .el-line { min-height: 6px; }
+  .el.selected { outline: 2px solid rgb(0,110,255); background: rgba(0,110,255,.08); z-index: 2; }
+  .el .h { display: none; position: absolute; width: 10px; height: 10px; background: #fff;
+           border: 2px solid rgb(0,110,255); border-radius: 2px; }
+  .el.selected .h { display: block; }
+  .h-nw { left: -6px; top: -6px; cursor: nwse-resize; } .h-ne { right: -6px; top: -6px; cursor: nesw-resize; }
+  .h-sw { left: -6px; bottom: -6px; cursor: nesw-resize; } .h-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+  .h-n { left: calc(50% - 5px); top: -6px; cursor: ns-resize; } .h-s { left: calc(50% - 5px); bottom: -6px; cursor: ns-resize; }
+  .h-w { left: -6px; top: calc(50% - 5px); cursor: ew-resize; } .h-e { right: -6px; top: calc(50% - 5px); cursor: ew-resize; }
+  .layers { display: flex; flex-wrap: wrap; gap: 4px; margin: 10px 0; }
+  .layers button { padding: 3px 8px; font-size: 12px; border-color: var(--line); }
+  .layers button.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .geom { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .props-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+  .props-actions button { padding: 5px 10px; font-size: 13px; }
 </style>
 </head>
 <body>
 <main>
   <h1>Label printer</h1>
+  <nav class="tabs">
+    <button type="button" id="tabDesigner" class="active">Designer</button>
+    <button type="button" id="tabCollections">Collections</button>
+  </nav>
+
+  <div class="card">
+    <div class="printer-bar">
+      <label>Density
+        <select id="density">
+          <option value="light">Light</option>
+          <option value="normal">Normal</option>
+          <option value="dark">Dark</option>
+          <option value="darkest">Darkest</option>
+          <option value="super-darkest" selected>Super darkest (slower)</option>
+          <option value="even-darker">Even darker (slower, bolder)</option>
+          <option value="impossible">Impossible (slowest, boldest)</option>
+        </select>
+      </label>
+      <label>Feed after (dots, 8 = 1 mm) <input id="feed" type="number" value="80" min="0" max="1000"></label>
+      <button id="connect" type="button">Connect Bluetooth printer</button>
+      <p id="printStatus" class="status"></p>
+    </div>
+  </div>
+
+  <div id="designerView">
+  <div class="card" id="sizeScreen">
+    <h2 class="step-title">Choose a label size</h2>
+    <p class="caption">Width is fixed at 384 px (4.8 cm) for this printer; this sets the label's height
+      (how much it prints length-ways).</p>
+    <div class="size-options">
+      <button type="button" class="size-option" data-height="128">
+        <strong>Common</strong>
+        <span class="size-px">128 px</span>
+        <span class="size-cm"></span>
+      </button>
+      <button type="button" class="size-option" data-height="412">
+        <strong>Big</strong>
+        <span class="size-px">412 px</span>
+        <span class="size-cm"></span>
+      </button>
+      <button type="button" class="size-option" id="customSizeBtn">
+        <strong>Custom</strong>
+        <span class="size-px">your size</span>
+      </button>
+    </div>
+    <div class="custom-size hidden" id="customSizeRow">
+      <label>Height (px) <input id="customHeight" type="number" min="32" max="2400" value="128"></label>
+      <span class="caption" id="customHeightCm"></span>
+      <button type="button" class="primary" id="customSizeConfirm">Use this size</button>
+    </div>
+  </div>
+
+  <div id="editor" class="hidden">
+  <p class="back-row"><button type="button" id="changeSizeBtn">← Change size</button></p>
+
+  <div class="card">
+    <div class="seg">
+      <button type="button" id="modeAuto" class="active">Automatic layout</button>
+      <button type="button" id="modeFree">Free layout (grid)</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="freeEditor">
+    <div class="free-bar">
+      <button type="button" data-add="text">+ Text</button>
+      <button type="button" data-add="icon">+ Icon</button>
+      <button type="button" data-add="qty">+ Quantity</button>
+      <button type="button" data-add="barcode">+ Barcode</button>
+      <button type="button" data-add="qr">+ QR code</button>
+      <button type="button" data-add="line">+ Line</button>
+      <span class="spacer"></span>
+      <label>Snap
+        <select id="snap" aria-label="Snap to grid">
+          <option value="0">Off</option>
+          <option value="4">4 px</option>
+          <option value="8" selected>8 px (1 mm)</option>
+          <option value="16">16 px</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="showGrid" checked> Grid</label>
+    </div>
+    <div class="stage" id="stage" tabindex="0" aria-label="Label canvas: drag elements to move them, drag the handles to resize">
+      <img id="freeImg" alt="">
+      <div class="grid-lines" id="stageGrid"></div>
+      <div id="stageEls"></div>
+    </div>
+    <p id="freeStatus" class="status"></p>
+    <div class="layers" id="layers"></div>
+    <div class="grid" id="elProps"></div>
+    <div id="freeIconSlot"></div>
+  </div>
 
   <form id="label" class="card grid" autocomplete="off">
-    <label class="wide">Name <input name="text" value="" required></label>
-    <label>Quantity <input name="qty" value="3ml"></label>
-    <label>Font size (px) <input name="font-size" type="number" min="0" max="400" placeholder="auto"></label>
+    <label class="wide auto-only">Name <input name="text" value="" required></label>
+    <label class="auto-only">Quantity
+      <span class="qty-row">
+        <input id="qtyAmount" type="number" min="0" step="any" value="1" aria-label="Quantity amount">
+        <select id="qtyUnit" aria-label="Quantity unit">
+          <option value="units">units</option>
+          <option value="kg">kg</option>
+          <option value="g">g</option>
+          <option value="mg">mg</option>
+          <option value="ug">ug</option>
+          <option value="ml">ml</option>
+          <option value="l">l</option>
+        </select>
+      </span>
+      <input type="hidden" name="qty" value="">
+    </label>
+    <label class="auto-only">Font size (px) <input name="font-size" type="number" min="0" max="400"></label>
 
-    <div class="wide">
+    <div class="wide auto-only">
       <div class="head">
         <span class="caption">Info lines</span>
         <select id="addInfo" aria-label="Add an info line">
@@ -93,12 +281,17 @@
       </div>
       <div id="infoList"></div>
     </div>
-    <label>Info size (px) <input name="info-size" type="number" min="0" max="400" placeholder="auto"></label>
-    <label>Height (px) <input name="height" type="number" value="128" min="32" max="2400"></label>
-    <label>Space after name (px) <input name="info-gap" type="number" min="0" max="400" placeholder="auto"></label>
-    <label>Space between info lines (px) <input name="info-spacing" type="number" min="0" max="400" placeholder="auto"></label>
+    <label class="auto-only">Info size (px) <input name="info-size" type="number" min="0" max="400"></label>
+    <label>Height (px) <input name="height" type="number" value="128" min="32" max="2400"><span class="caption" id="heightCm"></span></label>
+    <label class="auto-only">Space after name (px) <input name="info-gap" type="number" min="0" max="400"></label>
+    <label class="auto-only">Space between info lines (px) <input name="info-spacing" type="number" min="0" max="400"></label>
 
-    <div class="wide">
+    <div class="wide grid hidden auto-only" id="tallOptions">
+      <label>Barcode (Code 128) <input name="barcode" maxlength="32" placeholder="e.g. lot or product code"></label>
+      <label>Footer <input name="footer" maxlength="80" placeholder="e.g. Keep away from heat"></label>
+    </div>
+
+    <div class="wide" id="iconPicker">
       <div class="head">
         <span class="caption">Icon</span>
         <div class="search">
@@ -113,37 +306,77 @@
         </div>
       </div>
       <div id="iconGrid" class="icons"></div>
-      <input type="hidden" name="icon" value="">
+      <input type="hidden" name="icon" value="" form="label">
     </div>
-    <label class="check"><input type="checkbox" name="frame" checked> Frame</label>
+    <label class="check" id="frameLabel"><input type="checkbox" name="frame" checked> Frame</label>
   </form>
 
-  <div class="card">
+  <div class="card" id="previewCard">
     <div class="preview"><img id="preview" alt="Label preview"></div>
     <p id="labelStatus" class="status"></p>
   </div>
 
   <div class="card">
     <div class="grid">
-      <label>Density
-        <select id="density">
-          <option value="light">Light</option>
-          <option value="normal">Normal</option>
-          <option value="dark" selected>Dark</option>
-          <option value="darkest">Darkest</option>
-          <option value="super-darkest">Super darkest (slower)</option>
-          <option value="even-darker">Even darker (slower, bolder)</option>
-          <option value="impossible">Impossible (slowest, boldest)</option>
-        </select>
-      </label>
       <label>Copies <input id="copies" type="number" value="1" min="1" max="50"></label>
-      <label>Feed after (dots, 8 = 1 mm) <input id="feed" type="number" value="80" min="0" max="1000"></label>
     </div>
     <div class="buttons">
-      <button id="connect" type="button">Connect printer</button>
-      <button id="print" type="button" class="primary" disabled>Print</button>
+      <button id="print" type="button" class="primary" disabled>Print via Bluetooth</button>
     </div>
-    <p id="printStatus" class="status"></p>
+  </div>
+
+  <div class="card">
+    <h2 class="step-title">Save to a collection</h2>
+    <p class="caption" id="editingNote"></p>
+    <div class="grid">
+      <label class="wide">Collection <select id="saveCollection"></select></label>
+    </div>
+    <div class="buttons">
+      <button id="saveLabel" type="button" class="primary">Save</button>
+      <button id="saveCopy" type="button" class="hidden">Save as new</button>
+    </div>
+    <p id="saveStatus" class="status"></p>
+  </div>
+  </div>
+  </div>
+
+  <div id="collectionsView" class="hidden">
+    <div class="coll-layout">
+      <aside class="card">
+        <ul class="coll-list" id="collList"></ul>
+        <button type="button" id="newColl">+ New collection</button>
+      </aside>
+      <section>
+        <div class="card">
+          <div class="head">
+            <h2 class="step-title" id="collTitle"></h2>
+            <span class="info-row">
+              <button type="button" class="small" id="renameColl">Rename</button>
+              <button type="button" class="small" id="deleteColl">Delete</button>
+            </span>
+          </div>
+          <label class="check"><input type="checkbox" id="batchMode"> Batch print on A4 (select several labels)</label>
+          <div id="labelGrid" class="label-grid"></div>
+        </div>
+        <div class="card hidden" id="batchPanel">
+          <h2 class="step-title">Batch print on A4</h2>
+          <p class="caption">Pick labels from this collection, up to what fits on one A4 page (choose your printer in the print dialog).</p>
+          <div class="batch-layout">
+            <div class="grid">
+              <label>Margin (mm) <input id="pageMargin" type="number" min="0" max="50" value="5"></label>
+              <label>Gap between labels (mm) <input id="pageGap" type="number" min="0" max="50" value="2"></label>
+              <p class="caption status wide" id="batchInfo"></p>
+              <div class="buttons wide">
+                <button type="button" id="batchClear">Clear selection</button>
+                <button type="button" class="primary" id="batchPrint" disabled>Print on A4…</button>
+              </div>
+              <p id="batchStatus" class="status wide"></p>
+            </div>
+            <div class="a4" id="a4Preview"></div>
+          </div>
+        </div>
+      </section>
+    </div>
   </div>
 </main>
 
@@ -312,21 +545,149 @@ function setStatus(el, text, isError = false) {
   el.classList.toggle('error', isError);
 }
 
+/** The status line under the label: the preview card's in automatic mode, the canvas's in free mode. */
+function setLabelStatus(text, isError = false) {
+  setStatus($('labelStatus'), text, isError);
+  setStatus($('freeStatus'), text, isError);
+}
+
 function updateButtons() {
   $('print').disabled = printing || !labelBlob || !device;
   $('connect').disabled = printing;
+  $('saveLabel').disabled = !labelBlob;
+  $('saveCopy').disabled = !labelBlob;
+  for (const b of document.querySelectorAll('.bt-print')) b.disabled = printing || !device;
 }
 
-function labelUrl() {
-  const q = new URLSearchParams({ width: WIDTH, frame: form.frame.checked ? '1' : '0' });
-  for (const name of ['text', 'qty', 'icon', 'font-size', 'info-size', 'info-gap', 'info-spacing', 'height']) {
-    const value = form.elements[name].value.trim();
-    if (value !== '') q.set(name, value);
+// ---- Label size screen -------------------------------------------------------
+// The printer is 384 dots (48 mm) wide and does 8 dots per mm, so height in px / 80 = cm.
+const PX_PER_CM = 80;
+const formatCm = px => (Number(px) / PX_PER_CM).toFixed(2) + ' cm';
+
+for (const opt of document.querySelectorAll('.size-option[data-height]')) {
+  opt.querySelector('.size-cm').textContent = formatCm(opt.dataset.height);
+}
+
+function markSelectedSize() {
+  const current = form.height.value;
+  for (const opt of document.querySelectorAll('.size-option[data-height]')) {
+    opt.classList.toggle('selected', opt.dataset.height === current);
   }
+  $('customSizeBtn').classList.toggle('selected', !['128', '412'].includes(current));
+}
+
+function updateHeightCm() {
+  $('heightCm').textContent = form.height.value ? '= ' + formatCm(form.height.value) : '';
+  updateTallOptions();
+  if (freeMode) renderStage();
+}
+
+// Barcode and footer need a tall label (LabelMaker::MIN_BAND_HEIGHT)
+const MIN_TALL_HEIGHT = 200;
+function updateTallOptions() {
+  $('tallOptions').classList.toggle('hidden', Number(form.height.value) < MIN_TALL_HEIGHT);
+}
+
+function chooseHeight(px) {
+  form.height.value = px;
+  updateHeightCm();
+  markSelectedSize();
+  $('sizeScreen').classList.add('hidden');
+  $('editor').classList.remove('hidden');
+  schedulePreview();
+}
+
+$('sizeScreen').addEventListener('click', e => {
+  const opt = e.target.closest('.size-option[data-height]');
+  if (opt) chooseHeight(Number(opt.dataset.height));
+});
+
+function updateCustomCm() {
+  $('customHeightCm').textContent = '= ' + formatCm($('customHeight').value || 0);
+}
+
+$('customSizeBtn').addEventListener('click', () => {
+  $('customSizeRow').classList.remove('hidden');
+  $('customHeight').value = form.height.value || 128;
+  updateCustomCm();
+  $('customHeight').focus();
+});
+
+$('customHeight').addEventListener('input', updateCustomCm);
+
+$('customSizeConfirm').addEventListener('click', () => {
+  const px = Math.max(32, Math.min(2400, parseInt($('customHeight').value, 10) || 128));
+  chooseHeight(px);
+});
+
+$('changeSizeBtn').addEventListener('click', () => {
+  $('editor').classList.add('hidden');
+  $('sizeScreen').classList.remove('hidden');
+  markSelectedSize();
+  const isCustom = !['128', '412'].includes(form.height.value);
+  $('customSizeRow').classList.toggle('hidden', !isCustom);
+  if (isCustom) {
+    $('customHeight').value = form.height.value;
+    updateCustomCm();
+  }
+});
+
+const DESIGN_FIELDS = ['text', 'qty', 'icon', 'barcode', 'footer', 'font-size', 'info-size', 'info-gap', 'info-spacing', 'height'];
+
+/** Everything that defines the label, as a plain object that can be saved and restored. */
+function getDesign() {
+  const design = { frame: form.frame.checked, info: [], qtyAmount: $('qtyAmount').value, qtyUnit: $('qtyUnit').value };
+  for (const name of DESIGN_FIELDS) design[name] = form.elements[name].value.trim();
   for (const input of $('infoList').querySelectorAll('input')) {
-    if (input.value.trim() !== '') q.append('info[]', input.value.trim());
+    if (input.value.trim() !== '') design.info.push(input.value.trim());
   }
+  if (freeMode) {
+    design.mode = 'free';
+    design.elements = elements.map(e => ({ ...e }));
+    // The first text box names the label in the collections
+    const first = elements.find(e => e.t === 'text' && e.v.replace(/\|/g, '').trim() !== '');
+    design.text = first ? first.v.replace(/\s*\|\s*/g, ' ').trim() : (design.text || 'Label');
+  }
+  return design;
+}
+
+function labelUrlFor(design) {
+  if (design.mode === 'free') {
+    return 'label.php?' + new URLSearchParams({
+      width: WIDTH, frame: design.frame ? '1' : '0', height: design.height || 128,
+      elements: JSON.stringify((design.elements || []).map(({ id, ...e }) => e)),
+    });
+  }
+  const q = new URLSearchParams({ width: WIDTH, frame: design.frame ? '1' : '0' });
+  for (const name of DESIGN_FIELDS) {
+    const value = design[name] || '';
+    const tallOnly = name === 'barcode' || name === 'footer';
+    if (value !== '' && !(tallOnly && Number(design.height) < MIN_TALL_HEIGHT)) q.set(name, value);
+  }
+  for (const line of design.info || []) q.append('info[]', line);
   return 'label.php?' + q;
+}
+
+const labelUrl = () => labelUrlFor(getDesign());
+
+function setDesign(design) {
+  elements = (design.elements || []).map(e => ({ ...e, id: e.id || newId() }));
+  selectedId = null;
+  setMode(design.mode === 'free');
+  for (const name of DESIGN_FIELDS) form.elements[name].value = design[name] ?? '';
+  form.frame.checked = design.frame !== false;
+  $('qtyAmount').value = design.qtyAmount ?? '';
+  $('qtyUnit').value = design.qtyUnit ?? 'units';
+  updateQty();
+  $('infoList').replaceChildren();
+  for (const line of design.info || []) addInfoLine(line, false);
+  updateInfoControls();
+  showIcons();
+  updateHeightCm();
+  markSelectedSize();
+  $('sizeScreen').classList.add('hidden');
+  $('editor').classList.remove('hidden');
+  schedulePreview();
 }
 
 function schedulePreview() {
@@ -378,6 +739,7 @@ function addInfoLine(text, focus = true) {
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
   }
+  return row;
 }
 
 function updateInfoControls() {
@@ -437,7 +799,7 @@ function iconButton(name) {
   b.type = 'button';
   b.title = name ? name.replace(/_/g, ' ') : 'No icon';
   b.dataset.name = name;
-  b.classList.toggle('selected', form.icon.value === name);
+  b.classList.toggle('selected', currentIcon() === name);
   const icon = icons[name];
   if (!icon) {
     const span = document.createElement('span');
@@ -464,7 +826,7 @@ function showIcons() {
   const names = search === ''
     ? ICON_GROUPS[$('iconGroup').value].filter(n => n in icons)
     : Object.keys(icons).filter(n => n.includes(search));
-  const selected = form.icon.value;
+  const selected = currentIcon();
   if (selected && !names.includes(selected) && selected in icons) names.unshift(selected);
   grid.replaceChildren(iconButton(''));
   for (const name of names.slice(0, MAX_SHOWN)) {
@@ -486,7 +848,13 @@ function showIcons() {
 $('iconGrid').addEventListener('click', e => {
   const button = e.target.closest('button');
   if (!button) return;
-  form.icon.value = button.dataset.name;
+  if (freeMode) {
+    const el = selectedEl();
+    if (el && el.t === 'icon') el.v = button.dataset.name;
+    renderLayers();
+  } else {
+    form.icon.value = button.dataset.name;
+  }
   for (const b of $('iconGrid').querySelectorAll('button')) b.classList.toggle('selected', b === button);
   schedulePreview();
 });
@@ -525,11 +893,546 @@ async function loadIcons() {
   }
 }
 
+// ---- Free layout: place texts, icons, quantities, barcodes and QR codes anywhere on a grid ----------------
+// Each element is { id, t, x, y, w, h, v, a, s, b } in label pixels (the "elements" option of
+// LabelMaker): t = text | icon | qty | barcode | qr | line, v = its text / icon name / quantity / barcode,
+// a = l | c | r, s = text size px (0 = as big as fits the box), b = bold. The picture on the canvas is
+// drawn by label.php; the boxes on top of it only move and resize the elements.
+
+const MAX_ELEMENTS = 24;
+const MIN_BOX = 8;
+const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+const TYPE_NAMES = { text: 'Text', icon: 'Icon', qty: 'Quantity', barcode: 'Barcode', qr: 'QR code', line: 'Line' };
+const ELEMENT_DEFAULTS = {
+  text: { w: 160, h: 40, v: 'Text', a: 'l', s: 0, b: 0 },
+  icon: { w: 64, h: 64, v: 'drop', a: 'l', s: 0, b: 0 },
+  qty: { w: 96, h: 56, v: '3ml', a: 'r', s: 0, b: 0 },
+  barcode: { w: 200, h: 56, v: '123456', a: 'l', s: 0, b: 0 },
+  qr: { w: 96, h: 96, v: 'https://example.com', a: 'l', s: 0, b: 0 },
+  line: { w: 200, h: 2, v: '', a: 'l', s: 0, b: 0 },
+};
+
+let freeMode = false;
+let elements = [];
+let selectedId = null;
+let drag = null;
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const heightPx = () => clamp(parseInt(form.height.value, 10) || 128, 32, 2400);
+const snapStep = () => Number($('snap').value) || 0;
+const snapTo = v => { const g = snapStep(); return g ? Math.round(v / g) * g : Math.round(v); };
+const elById = id => elements.find(e => e.id === id);
+const selectedEl = () => elById(selectedId);
+const currentIcon = () => freeMode ? (selectedEl()?.t === 'icon' ? selectedEl().v : '') : form.icon.value;
+
+function setMode(free) {
+  freeMode = free;
+  form.classList.toggle('free-mode', free);
+  $('freeEditor').classList.toggle('hidden', !free);
+  $('previewCard').classList.toggle('hidden', free);
+  $('modeAuto').classList.toggle('active', !free);
+  $('modeFree').classList.toggle('active', free);
+  // In free mode the icon picker sits under the canvas and edits the selected icon
+  if (free) $('freeIconSlot').append($('iconPicker'));
+  else form.insertBefore($('iconPicker'), $('frameLabel'));
+  if (free) renderStage();
+  updateIconPicker();
+}
+
+function updateIconPicker() {
+  $('iconPicker').classList.toggle('hidden', freeMode && selectedEl()?.t !== 'icon');
+  showIcons();
+}
+
+/** A starting layout from the automatic design: icon left, name and info lines, quantity right. */
+function autoToElements(d) {
+  const H = heightPx();
+  const r8 = v => Math.round(v / 8) * 8;
+  const els = [];
+  const add = (t, x, y, w, h, extra = {}) => els.push({ id: newId(), t, x, y, w, h, ...ELEMENT_DEFAULTS[t], ...extra });
+  const tall = H >= 200;
+  const footer = tall && d.footer ? d.footer : '';
+  const barcode = tall && d.barcode ? d.barcode : '';
+  let bottom = H - 16;
+  if (footer) { add('text', 24, bottom - 24, WIDTH - 48, 24, { v: footer, a: 'c', s: 18 }); bottom -= 32; }
+  if (barcode) { add('barcode', 24, bottom - 64, WIDTH - 48, 64, { v: barcode }); bottom -= 72; }
+  let left = 24, right = WIDTH - 24;
+  const top = 16, avail = bottom - top;
+  if (d.icon) {
+    const size = Math.max(16, Math.min(64, r8(avail - 8)));
+    add('icon', left, top + r8((avail - size) / 2), size, size, { v: d.icon });
+    left += size + 8;
+  }
+  if (d.qty) {
+    add('qty', right - 96, top + r8((avail - 56) / 2), 96, 56, { v: d.qty });
+    right -= 104;
+  }
+  // Always a name box (the Name field is not shown in free mode), even if no name was typed yet
+  const nameH = d.info?.length ? r8(avail * 0.55) : avail;
+  add('text', left, top, right - left, nameH, { v: d.text || 'Name', b: 1 });
+  if (d.info?.length) add('text', left, top + nameH, right - left, avail - nameH, { v: d.info.join('|') });
+  return els.slice(-MAX_ELEMENTS);
+}
+
+$('modeFree').addEventListener('click', () => {
+  if (freeMode) return;
+  if (elements.length === 0) elements = autoToElements(getDesign());
+  selectedId = null;
+  setMode(true);
+  schedulePreview();
+});
+$('modeAuto').addEventListener('click', () => {
+  if (!freeMode) return;
+  setMode(false);
+  schedulePreview();
+});
+
+// ---- Canvas
+
+function placeBox(box, el) {
+  const H = heightPx();
+  box.style.left = el.x / WIDTH * 100 + '%';
+  box.style.top = el.y / H * 100 + '%';
+  box.style.width = el.w / WIDTH * 100 + '%';
+  box.style.height = el.h / H * 100 + '%';
+}
+
+function renderStage() {
+  const H = heightPx();
+  const g = snapStep();
+  $('stage').style.aspectRatio = `${WIDTH} / ${H}`;
+  $('stageGrid').classList.toggle('hidden', !g || !$('showGrid').checked);
+  if (g) $('stageGrid').style.backgroundSize = `${g / WIDTH * 100}% ${g / H * 100}%`;
+  $('stageEls').replaceChildren(...elements.map(el => {
+    const box = document.createElement('div');
+    box.className = `el el-${el.t}`;
+    box.dataset.id = el.id;
+    for (const h of HANDLES) {
+      const knob = document.createElement('i');
+      knob.className = `h h-${h}`;
+      knob.dataset.h = h;
+      box.append(knob);
+    }
+    placeBox(box, el);
+    return box;
+  }));
+  markSelected();
+  renderLayers();
+  renderProps();
+}
+
+function markSelected() {
+  for (const box of $('stageEls').children) box.classList.toggle('selected', box.dataset.id === selectedId);
+}
+
+function select(id) {
+  selectedId = id;
+  markSelected();
+  renderLayers();
+  renderProps();
+  updateIconPicker();
+}
+
+function layerName(el) {
+  const v = el.t === 'icon' ? el.v.replace(/_/g, ' ') : el.v.replace(/\|/g, ' ');
+  return TYPE_NAMES[el.t] + (v ? `: ${v.length > 14 ? v.slice(0, 13) + '…' : v}` : '');
+}
+
+function renderLayers() {
+  $('layers').replaceChildren(...elements.map((el, i) => {
+    const b = button(`${i + 1}. ${layerName(el)}`, () => { select(el.id); $('stage').focus({ preventScroll: true }); });
+    b.classList.toggle('active', el.id === selectedId);
+    return b;
+  }));
+}
+
+function addElement(type) {
+  if (elements.length >= MAX_ELEMENTS) {
+    setLabelStatus(`At most ${MAX_ELEMENTS} elements on a label.`, true);
+    return;
+  }
+  const H = heightPx();
+  const el = { id: newId(), t: type, x: 0, y: 0, ...ELEMENT_DEFAULTS[type] };
+  el.w = Math.min(el.w, WIDTH);
+  el.h = Math.min(el.h, H);
+  const offset = (elements.length % 6) * 16;   // each new one a little further, so they do not hide each other
+  el.x = clamp(snapTo(16 + offset), 0, WIDTH - el.w);
+  el.y = clamp(snapTo(12 + offset), 0, H - el.h);
+  elements.push(el);
+  renderStage();
+  select(el.id);
+  schedulePreview();
+}
+
+for (const b of document.querySelectorAll('[data-add]')) b.addEventListener('click', () => addElement(b.dataset.add));
+$('snap').addEventListener('change', renderStage);
+$('showGrid').addEventListener('change', renderStage);
+
+function removeSelected() {
+  elements = elements.filter(e => e.id !== selectedId);
+  selectedId = null;
+  renderStage();
+  updateIconPicker();
+  schedulePreview();
+}
+
+// ---- Properties of the selected element
+
+function renderProps() {
+  const el = selectedEl();
+  const box = $('elProps');
+  if (!el) {
+    box.replaceChildren(Object.assign(document.createElement('p'), {
+      className: 'caption wide', textContent: elements.length
+        ? 'Click an element on the label to edit it.'
+        : 'Add texts, icons, quantities and barcodes with the buttons above, then drag them into place.',
+    }));
+    return;
+  }
+  const field = (text, input, wide = false) => {
+    const l = document.createElement('label');
+    if (wide) l.className = 'wide';
+    l.append(text, input);
+    return l;
+  };
+  const input = (type, attrs, onInput) => {
+    const i = document.createElement('input');
+    i.type = type;
+    Object.assign(i, attrs);
+    i.addEventListener('input', () => { onInput(i); schedulePreview(); });
+    return i;
+  };
+  const changed = () => { renderLayers(); schedulePreview(); };
+  const parts = [];
+  const textLike = el.t === 'text' || el.t === 'qty' || el.t === 'barcode' || el.t === 'qr';
+  if (textLike) {
+    const labels = { text: 'Text (| = new line)', qty: 'Quantity (e.g. 3ml)', barcode: 'Barcode (Code 128)', qr: 'QR code (text or link)' };
+    const max = { text: 120, qty: 24, barcode: 32, qr: 120 };
+    parts.push(field(labels[el.t], input('text', { value: el.v, maxLength: max[el.t] }, i => { el.v = i.value; renderLayers(); }), true));
+  } else if (el.t === 'icon') {
+    const p = document.createElement('p');
+    p.className = 'caption wide';
+    p.textContent = 'Pick the icon below.';
+    parts.push(p);
+  }
+  if (el.t === 'text') {
+    parts.push(field('Size (px, empty = fit the box)', input('number', { value: el.s || '', min: 0, max: 400, placeholder: 'auto' }, i => { el.s = parseInt(i.value, 10) || 0; })));
+  }
+  if (el.t === 'text' || el.t === 'qty' || el.t === 'qr') {
+    const sel = document.createElement('select');
+    sel.append(new Option('Left', 'l'), new Option('Centre', 'c'), new Option('Right', 'r'));
+    sel.value = el.a;
+    sel.addEventListener('change', () => { el.a = sel.value; changed(); });
+    parts.push(field('Align', sel));
+  }
+  if (el.t === 'text') {
+    const cb = input('checkbox', { checked: !!el.b }, i => { el.b = i.checked ? 1 : 0; });
+    const l = field(' Bold', cb);
+    l.className = 'check';
+    l.prepend(cb);
+    parts.push(l);
+  }
+  const geom = document.createElement('div');
+  geom.className = 'geom';
+  for (const [key, text] of [['x', 'X'], ['y', 'Y'], ['w', 'Width'], ['h', 'Height']]) {
+    const i = input('number', { value: el[key], min: 0, max: 2400 }, i => {
+      el[key] = clamp(parseInt(i.value, 10) || 0, key === 'w' || key === 'h' ? 1 : 0, 2400);
+      placeBox($('stageEls').querySelector(`[data-id="${el.id}"]`), el);
+    });
+    i.dataset.key = key;
+    geom.append(field(text, i));
+  }
+  const actions = document.createElement('div');
+  actions.className = 'props-actions';
+  const move = delta => () => {
+    const i = elements.indexOf(el), j = clamp(i + delta, 0, elements.length - 1);
+    elements.splice(i, 1);
+    elements.splice(j, 0, el);
+    renderStage();
+    schedulePreview();
+  };
+  actions.append(
+    button('Duplicate', () => {
+      if (elements.length >= MAX_ELEMENTS) return setLabelStatus(`At most ${MAX_ELEMENTS} elements on a label.`, true);
+      const copy = { ...el, id: newId(), x: clamp(el.x + (snapStep() || 8), 0, WIDTH - el.w), y: clamp(el.y + (snapStep() || 8), 0, heightPx() - el.h) };
+      elements.push(copy);
+      renderStage();
+      select(copy.id);
+      schedulePreview();
+    }),
+    button('Bring forward', move(1)),
+    button('Send back', move(-1)),
+    button('Delete', removeSelected),
+  );
+  box.replaceChildren(...parts, geom, actions);
+}
+
+function syncGeometry() {
+  const el = selectedEl();
+  if (!el) return;
+  for (const i of $('elProps').querySelectorAll('[data-key]')) i.value = el[i.dataset.key];
+}
+
+// ---- Dragging, resizing and arrow keys on the canvas
+
+$('stage').addEventListener('pointerdown', e => {
+  $('stage').focus({ preventScroll: true });
+  const box = e.target.closest('.el');
+  if (!box) {
+    if (selectedId) select(null);
+    return;
+  }
+  e.preventDefault();
+  const el = elById(box.dataset.id);
+  if (selectedId !== el.id) select(el.id);
+  drag = {
+    el, box, handle: e.target.dataset.h || '', x0: e.clientX, y0: e.clientY,
+    orig: { x: el.x, y: el.y, w: el.w, h: el.h },
+    z: $('stage').getBoundingClientRect().width / WIDTH,   // screen px per label px
+  };
+  $('stage').setPointerCapture(e.pointerId);
+});
+
+$('stage').addEventListener('pointermove', e => {
+  if (!drag) return;
+  const { el, orig, handle } = drag;
+  const dx = (e.clientX - drag.x0) / drag.z;
+  const dy = (e.clientY - drag.y0) / drag.z;
+  const H = heightPx();
+  if (!handle) {
+    el.x = clamp(snapTo(orig.x + dx), 0, WIDTH - el.w);
+    el.y = clamp(snapTo(orig.y + dy), 0, H - el.h);
+  } else {
+    const minH = el.t === 'line' ? 1 : MIN_BOX;
+    let left = orig.x, top = orig.y, right = orig.x + orig.w, bottom = orig.y + orig.h;
+    if (handle.includes('w')) left = clamp(snapTo(orig.x + dx), 0, right - MIN_BOX);
+    if (handle.includes('e')) right = clamp(snapTo(right + dx), left + MIN_BOX, WIDTH);
+    if (handle.includes('n')) top = clamp(snapTo(orig.y + dy), 0, bottom - minH);
+    if (handle.includes('s')) bottom = clamp(snapTo(bottom + dy), top + minH, H);
+    Object.assign(el, { x: left, y: top, w: right - left, h: bottom - top });
+  }
+  placeBox(drag.box, el);
+  syncGeometry();
+});
+
+const endDrag = () => {
+  if (!drag) return;
+  drag = null;
+  schedulePreview();
+};
+$('stage').addEventListener('pointerup', endDrag);
+$('stage').addEventListener('pointercancel', endDrag);
+
+$('stage').addEventListener('keydown', e => {
+  const el = selectedEl();
+  if (!el) return;
+  const step = e.shiftKey ? 1 : (snapStep() || 1);
+  const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  if (arrows[e.key]) {
+    el.x = clamp(el.x + arrows[e.key][0] * step, 0, WIDTH - el.w);
+    el.y = clamp(el.y + arrows[e.key][1] * step, 0, heightPx() - el.h);
+    placeBox($('stageEls').querySelector(`[data-id="${el.id}"]`), el);
+    syncGeometry();
+    schedulePreview();
+  } else if (e.key === 'Delete' || e.key === 'Backspace') {
+    removeSelected();
+  } else {
+    return;
+  }
+  e.preventDefault();
+});
+
+// ---- Smart guessing from the Name field --------------------------------------
+// Typing a food name picks a matching icon, and (for foods we have a rough idea
+// about) fills in "Best before", "Keep refrigerated" and "Store in a cool, dry
+// place" info lines from general food-safety knowledge. Words already in the name
+// such as "cooked", "frozen" or "dried" change which figures apply. Nothing here
+// is precise food-safety advice - it's a starting guess the person can edit.
+
+// Words (or icon-style two-word phrases, e.g. "sweet potato") that mean a different icon name
+const ICON_SYNONYMS = {
+  lime: 'lemon', limes: 'lemon', cantaloupe: 'melon', honeydew: 'melon', grape: 'grapes',
+  blueberry: 'blueberries', berry: 'blueberries', berries: 'blueberries', raspberry: 'blueberries',
+  raspberries: 'blueberries', blackberry: 'blueberries', blackberries: 'blueberries', cherry: 'cherries',
+  squash: 'pumpkin', maize: 'corn', chilli: 'chili', chillies: 'chili', chile: 'chili',
+  bell_pepper: 'pepper', capsicum: 'pepper', lettuce: 'leafy_green', spinach: 'leafy_green',
+  kale: 'leafy_green', cabbage: 'leafy_green', yam: 'sweet_potato', yams: 'sweet_potato',
+  aubergine: 'eggplant', pea: 'peas', bean: 'beans', lentil: 'beans', lentils: 'beans',
+  nut: 'nuts', almond: 'nuts', almonds: 'nuts', peanut: 'nuts', peanuts: 'nuts',
+  walnut: 'nuts', walnuts: 'nuts', cashew: 'nuts', cashews: 'nuts', loaf: 'bread',
+  basil: 'herb', parsley: 'herb', mint: 'herb', thyme: 'herb', rosemary: 'herb', oregano: 'herb',
+  dill: 'herb', cilantro: 'herb', coriander: 'herb', sage: 'herb', chives: 'herb', tarragon: 'herb',
+  pancake: 'pancakes', egg: 'egg_emoji', eggs: 'egg_emoji', rice: 'cooked_rice',
+  pasta: 'spaghetti', noodle: 'spaghetti', noodles: 'spaghetti', biscuit: 'cookie',
+  biscuits: 'cookie', chocolate: 'chocolate_bar', sweets: 'candy', cake: 'cupcake',
+  donut: 'doughnut', donuts: 'doughnut', ice_cream: 'soft_ice_cream', icecream: 'soft_ice_cream',
+  canned: 'canned_food', can: 'canned_food', tin: 'canned_food', tinned: 'canned_food',
+  ham: 'meat_on_bone', turkey: 'poultry_leg', drumstick: 'poultry_leg', wing: 'poultry_leg',
+  chicken: 'poultry_leg', poultry: 'poultry_leg', beef: 'cut_of_meat', steak: 'cut_of_meat',
+  pork: 'cut_of_meat', lamb: 'cut_of_meat', meat: 'cut_of_meat', prawn: 'shrimp', prawns: 'shrimp',
+  salmon: 'fish', tuna: 'fish', cod: 'fish',
+};
+
+// Words in the name that mean the food is in that state (first one found wins, in this order)
+const STATE_WORDS = {
+  cooked: ['cooked', 'leftover', 'leftovers', 'baked', 'roasted', 'grilled', 'fried', 'boiled', 'steamed', 'stewed', 'reheated'],
+  frozen: ['frozen', 'freeze', 'freezer'],
+  dry: ['dried', 'dry', 'dehydrated'],
+};
+
+// icon name -> roughly how long it keeps, in days: fresh (raw/as-is), cooked (or a
+// leftover), dry (a dried/dry-stored good); fridge: keep it refrigerated once fresh/cooked.
+// Foods with no "fresh" figure (rice, honey, canned food...) are dry/shelf-stable by default.
+const FOOD_SHELF_LIFE = {
+  apple: { fresh: 21, cooked: 5, dry: 180, fridge: true }, green_apple: { fresh: 21, cooked: 5, dry: 180, fridge: true },
+  pear: { fresh: 7, cooked: 5, fridge: true }, orange: { fresh: 14, cooked: 5, fridge: true },
+  lemon: { fresh: 21, cooked: 5, fridge: true }, banana: { fresh: 5, cooked: 3 },
+  watermelon: { fresh: 7, cooked: 3, fridge: true }, melon: { fresh: 7, cooked: 3, fridge: true },
+  grapes: { fresh: 7, cooked: 3, fridge: true }, strawberry: { fresh: 5, cooked: 3, fridge: true },
+  blueberries: { fresh: 10, cooked: 3, fridge: true }, cherries: { fresh: 7, cooked: 3, fridge: true },
+  peach: { fresh: 5, cooked: 3, fridge: true }, mango: { fresh: 5, cooked: 3, fridge: true },
+  pineapple: { fresh: 5, cooked: 3, fridge: true }, coconut: { fresh: 30, cooked: 5, dry: 180 },
+  kiwi: { fresh: 7, cooked: 3, fridge: true }, tomato: { fresh: 7, cooked: 5, fridge: true },
+  olive: { fresh: 14, cooked: 7, dry: 365, fridge: true }, avocado: { fresh: 5, cooked: 2, fridge: true },
+  pumpkin: { fresh: 60, cooked: 5 },
+  carrot: { fresh: 21, cooked: 5, fridge: true }, corn: { fresh: 5, cooked: 4, fridge: true },
+  chili: { fresh: 14, cooked: 5, dry: 365, fridge: true }, pepper: { fresh: 10, cooked: 5, fridge: true },
+  cucumber: { fresh: 7, cooked: 3, fridge: true }, broccoli: { fresh: 7, cooked: 4, fridge: true },
+  leafy_green: { fresh: 5, cooked: 3, fridge: true }, garlic: { fresh: 90, cooked: 5 },
+  onion: { fresh: 30, cooked: 5 }, potato: { fresh: 30, cooked: 4 }, sweet_potato: { fresh: 21, cooked: 4 },
+  eggplant: { fresh: 7, cooked: 4, fridge: true }, mushroom: { fresh: 7, cooked: 3, fridge: true },
+  ginger: { fresh: 21, cooked: 5, fridge: true }, peas: { fresh: 5, cooked: 4, dry: 365, fridge: true },
+  beans: { fresh: 5, cooked: 4, dry: 365, fridge: true }, nuts: { dry: 270 }, chestnut: { fresh: 14, cooked: 5, dry: 180, fridge: true },
+  herb: { fresh: 7, cooked: 4, dry: 365, fridge: true },
+  bread: { fresh: 5 }, croissant: { fresh: 2 }, baguette_bread: { fresh: 1 }, flatbread: { fresh: 4 },
+  pretzel: { fresh: 7, dry: 90 }, bagel: { fresh: 5 }, pancakes: { fresh: 3, cooked: 3, fridge: true },
+  waffle: { fresh: 3, cooked: 3, fridge: true }, cheese: { fresh: 14, fridge: true },
+  egg_emoji: { fresh: 21, cooked: 5, fridge: true }, butter: { fresh: 30, fridge: true },
+  milk: { fresh: 7, fridge: true }, honey: { dry: 730 }, salt: { dry: 3650 },
+  cooked_rice: { cooked: 4, dry: 730, fridge: true }, spaghetti: { cooked: 4, dry: 730, fridge: true },
+  canned_food: { dry: 730 }, fish: { fresh: 2, cooked: 3, fridge: true }, shrimp: { fresh: 2, cooked: 3, fridge: true },
+  poultry_leg: { fresh: 2, cooked: 4, fridge: true }, meat_on_bone: { fresh: 3, cooked: 4, fridge: true },
+  cut_of_meat: { fresh: 3, cooked: 4, fridge: true }, bacon: { fresh: 7, cooked: 4, fridge: true },
+  cookie: { fresh: 14, dry: 60 }, chocolate_bar: { dry: 365 }, candy: { dry: 365 }, lollipop: { dry: 365 },
+  custard: { fresh: 3, fridge: true }, cupcake: { fresh: 3 }, shortcake: { fresh: 3, fridge: true },
+  doughnut: { fresh: 2 },
+};
+const FROZEN_DAYS = 180;
+const DRY_DEFAULT_DAYS = 270;
+
+function wordsOf(text) {
+  return text.toLowerCase().normalize('NFKD').match(/[a-z]+/g) || [];
+}
+
+// A word/phrase means an icon if it's a synonym of one, or is already an icon name
+// itself (icon names are already English words, e.g. "sweet_potato", "green_apple"),
+// trying the exact word/phrase first and then simple plurals (-s, -es).
+function resolveIconName(phrase) {
+  for (const candidate of [phrase, phrase.replace(/es$/, ''), phrase.replace(/s$/, '')]) {
+    if (candidate in ICON_SYNONYMS) return ICON_SYNONYMS[candidate];
+    if (candidate in icons) return candidate;
+  }
+  return null;
+}
+
+// Finds the first word (or two-word phrase, e.g. "sweet potato") in the name that
+// means a known icon, trying two-word phrases (anywhere in the name) before single words.
+function guessIconFromName(words) {
+  for (let len = 2; len >= 1; len--) {
+    for (let i = 0; i + len <= words.length; i++) {
+      const name = resolveIconName(words.slice(i, i + len).join('_'));
+      if (name) return name;
+    }
+  }
+  return null;
+}
+
+function guessState(words) {
+  for (const state of ['cooked', 'frozen', 'dry']) {
+    if (words.some(w => STATE_WORDS[state].includes(w))) return state;
+  }
+  return null;
+}
+
+function computeGuess(entry, state) {
+  if (!state && entry.fresh == null && entry.dry != null) state = 'dry';   // e.g. "rice", "honey": shelf-stable by default
+  switch (state) {
+    case 'cooked': return { days: entry.cooked ?? entry.fresh ?? 4, fridge: true, dry: false };
+    case 'frozen': return { days: FROZEN_DAYS, fridge: false, dry: false };
+    case 'dry': return { days: entry.dry ?? DRY_DEFAULT_DAYS, fridge: false, dry: true };
+    default: return { days: entry.fresh ?? entry.cooked ?? DRY_DEFAULT_DAYS, fridge: !!entry.fridge, dry: false };
+  }
+}
+
+// Info lines added by the guesser are tagged data-smart so later changes to the
+// name can update or remove them again without touching lines added by hand.
+function setSmartInfoLine(tag, text) {
+  let row = $('infoList').querySelector(`.info-row[data-smart="${tag}"]`);
+  if (row) row.querySelector('input').value = text;
+  else {
+    row = addInfoLine(text, false);
+    if (row) row.dataset.smart = tag;
+  }
+}
+
+function clearSmartInfoLine(tag) {
+  const row = $('infoList').querySelector(`.info-row[data-smart="${tag}"]`);
+  if (row) {
+    row.remove();
+    updateInfoControls();
+  }
+}
+
+function applySmartGuess() {
+  const words = wordsOf(form.text.value);
+  const name = guessIconFromName(words);
+  if (!name) return;   // nothing recognised: leave the icon and info lines as they are
+
+  form.icon.value = name;
+  showIcons();
+
+  // Lab, care & cleaning items (flask, test tube, DNA...) get a "Batch" line instead of food info
+  if (ICON_GROUPS.care.includes(name)) {
+    clearSmartInfoLine('best_before');
+    clearSmartInfoLine('fridge');
+    clearSmartInfoLine('dry');
+    setSmartInfoLine('batch', INFO_PRESETS.batch());
+    return;
+  }
+  clearSmartInfoLine('batch');
+
+  const entry = FOOD_SHELF_LIFE[name];
+  if (!entry) {
+    clearSmartInfoLine('best_before');
+    clearSmartInfoLine('fridge');
+    clearSmartInfoLine('dry');
+    return;
+  }
+  const state = guessState(words);
+  const guess = computeGuess(entry, state);
+  // Fruit, vegetables, nuts and herbs: store cool & dry unless cooked (-> fridge) or frozen (-> neither)
+  if (!state && (ICON_GROUPS.fruit.includes(name) || ICON_GROUPS.veg.includes(name))) {
+    guess.fridge = false;
+    guess.dry = true;
+  }
+  setSmartInfoLine('best_before', `Best before: ${dateFromToday({ days: guess.days })}`);
+  guess.fridge ? setSmartInfoLine('fridge', 'Keep refrigerated') : clearSmartInfoLine('fridge');
+  guess.dry ? setSmartInfoLine('dry', 'Store in a cool, dry place') : clearSmartInfoLine('dry');
+}
+
+// Show the sizes the server picked as the placeholders of the inputs left empty
+function showLayout(layout) {
+  for (const name of ['font-size', 'info-size', 'info-gap', 'info-spacing']) {
+    form.elements[name].placeholder = layout[name] ?? '';
+  }
+}
+
 async function refreshPreview() {
-  if (form.elements.text.value.trim() === '') {
+  if (freeMode ? elements.length === 0 : form.elements.text.value.trim() === '') {
     labelBlob = null;
     $('preview').removeAttribute('src');
-    setStatus($('labelStatus'), 'Type a name to see the label');
+    $('freeImg').removeAttribute('src');
+    setLabelStatus(freeMode ? 'Add an element to start designing the label' : 'Type a name to see the label');
     updateButtons();
     return;
   }
@@ -537,18 +1440,31 @@ async function refreshPreview() {
     const res = await fetch(labelUrl());
     if (!res.ok) throw new Error(await res.text());
     labelBlob = await res.blob();
+    showLayout(JSON.parse(res.headers.get('X-Label-Layout') || '{}'));
     const old = $('preview').src;
-    $('preview').src = URL.createObjectURL(labelBlob);
+    const url = URL.createObjectURL(labelBlob);
+    $('preview').src = url;
+    $('freeImg').src = url;
     if (old.startsWith('blob:')) URL.revokeObjectURL(old);
-    setStatus($('labelStatus'), '');
+    setLabelStatus('');
   } catch (e) {
     labelBlob = null;
-    setStatus($('labelStatus'), e.message, true);
+    setLabelStatus(e.message, true);
   }
   updateButtons();
 }
 
+function updateQty() {
+  const amount = $('qtyAmount').value.trim();
+  const unit = $('qtyUnit').value;
+  form.qty.value = amount === '' ? '' : (unit === 'units' ? `${amount} units` : `${amount}${unit}`);
+}
+$('qtyUnit').addEventListener('change', () => { updateQty(); schedulePreview(); });
+
 form.addEventListener('input', e => {
+  if (e.target.name === 'height') updateHeightCm();
+  if (e.target.name === 'text') applySmartGuess();
+  if (e.target.id === 'qtyAmount' || e.target.id === 'qtyUnit') updateQty();
   if (e.target.id !== 'iconSearch' && e.target.id !== 'iconGroup') schedulePreview();
 });
 form.addEventListener('submit', e => e.preventDefault());
@@ -574,37 +1490,440 @@ $('connect').addEventListener('click', async () => {
   updateButtons();
 });
 
-$('print').addEventListener('click', async () => {
+/** Sends one label to the connected Bluetooth printer (connecting first if needed). */
+async function printViaBluetooth(blob, copies = 1) {
   const status = $('printStatus');
+  if (!device) throw new Error('Connect the Bluetooth printer first.');
+  if (!device.gatt.connected) {
+    setStatus(status, `Reconnecting to ${device.name}…`);
+    await openPrinter();
+  }
+  const rows = await imageRows(blob);
+  const feed = Math.max(0, Math.min(1000, parseInt($('feed').value, 10) || 0));
+  const density = $('density').value;
+  const job = printJob(rows, density, feed, copies);
+  for (let i = 0; i < job.length; i++) {
+    await write(job[i]);
+    await sleep(DENSITY[density][2]);
+    if (i % 16 === 0) setStatus(status, `Printing… ${Math.round(100 * i / job.length)}%`);
+  }
+  await sleep(1500);   // let it finish printing and feeding
+  setStatus(status, `Printed on ${device.name}`);
+}
+
+$('print').addEventListener('click', async () => {
   printing = true;
   updateButtons();
   try {
-    if (!device.gatt.connected) {
-      setStatus(status, `Reconnecting to ${device.name}…`);
-      await openPrinter();
-    }
-    const rows = await imageRows(labelBlob);
     const copies = Math.max(1, Math.min(50, parseInt($('copies').value, 10) || 1));
-    const feed = Math.max(0, Math.min(1000, parseInt($('feed').value, 10) || 0));
-    const density = $('density').value;
-    const job = printJob(rows, density, feed, copies);
-    for (let i = 0; i < job.length; i++) {
-      await write(job[i]);
-      await sleep(DENSITY[density][2]);
-      if (i % 16 === 0) setStatus(status, `Printing… ${Math.round(100 * i / job.length)}%`);
-    }
-    await sleep(1500);   // let it finish printing and feeding
-    setStatus(status, `Printed on ${device.name}`);
+    await printViaBluetooth(labelBlob, copies);
   } catch (e) {
-    setStatus(status, e.message, true);
+    setStatus($('printStatus'), e.message, true);
   }
   printing = false;
   updateButtons();
 });
 
+// ---- Collections (folders of saved labels, kept in this browser's localStorage) ----------------
+
+const STORE_KEY = 'labelmaker.collections.v1';
+let store = loadStore();
+let currentCollection = store.collections[0].id;
+let editingId = null;           // id of the saved label open in the designer, if any
+let chosen = [];                // label ids selected for the A4 batch, in order
+
+function loadStore() {
+  try {
+    const data = JSON.parse(localStorage.getItem(STORE_KEY));
+    if (data && Array.isArray(data.collections) && data.collections.length && Array.isArray(data.labels)) return data;
+  } catch (e) { /* storage unavailable or corrupt: start empty */ }
+  return { collections: [{ id: newId(), name: 'My labels' }], labels: [] };
+}
+
+function saveStore() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(store));
+  } catch (e) {
+    setStatus($('saveStatus'), 'Could not save in this browser: ' + e.message, true);
+  }
+}
+
+function newId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+const collectionLabels = id => store.labels.filter(l => l.collectionId === id);
+const labelById = id => store.labels.find(l => l.id === id);
+
+// Rendered label images, fetched once per design
+const blobCache = new Map();
+function labelBlobFor(design) {
+  const url = labelUrlFor(design);
+  if (!blobCache.has(url)) {
+    blobCache.set(url, fetch(url).then(res => {
+      if (!res.ok) throw new Error('Could not draw the label');
+      return res.blob();
+    }).catch(e => { blobCache.delete(url); throw e; }));
+  }
+  return blobCache.get(url);
+}
+
+const heightMm = design => (Number(design.height) || 128) / PX_PER_CM * 10;
+const WIDTH_MM = WIDTH / PX_PER_CM * 10;
+
+// ---- Tabs
+
+function showView(name) {
+  const isDesigner = name === 'designer';
+  $('designerView').classList.toggle('hidden', !isDesigner);
+  $('collectionsView').classList.toggle('hidden', isDesigner);
+  $('tabDesigner').classList.toggle('active', isDesigner);
+  $('tabCollections').classList.toggle('active', !isDesigner);
+  if (isDesigner) renderSaveTargets(); else renderCollections();
+}
+$('tabDesigner').addEventListener('click', () => showView('designer'));
+$('tabCollections').addEventListener('click', () => showView('collections'));
+
+// ---- Saving from the designer
+
+function renderSaveTargets() {
+  const select = $('saveCollection');
+  const keep = select.value || currentCollection;
+  select.replaceChildren(...store.collections.map(c => new Option(c.name, c.id)));
+  select.value = store.collections.some(c => c.id === keep) ? keep : store.collections[0].id;
+  const editing = editingId && labelById(editingId);
+  if (!editing) editingId = null;
+  $('editingNote').textContent = editing ? `Editing "${editing.name}" from your collections.` : '';
+  $('saveLabel').textContent = editing ? 'Update saved label' : 'Save';
+  $('saveCopy').classList.toggle('hidden', !editing);
+}
+
+function saveCurrent(asNew) {
+  const design = getDesign();
+  if (!design.text) return;
+  const collectionId = $('saveCollection').value;
+  const existing = !asNew && editingId && labelById(editingId);
+  if (existing) {
+    Object.assign(existing, { name: design.text, design, collectionId });
+  } else {
+    const label = { id: newId(), collectionId, name: design.text, design };
+    store.labels.push(label);
+    editingId = label.id;
+  }
+  currentCollection = collectionId;
+  saveStore();
+  renderSaveTargets();
+  const name = store.collections.find(c => c.id === collectionId).name;
+  setStatus($('saveStatus'), existing ? `Updated in "${name}"` : `Saved to "${name}"`);
+}
+$('saveLabel').addEventListener('click', () => saveCurrent(false));
+$('saveCopy').addEventListener('click', () => saveCurrent(true));
+
+// ---- Collection list
+
+function renderCollections() {
+  $('collList').replaceChildren(...store.collections.map(c => {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.classList.toggle('active', c.id === currentCollection);
+    const name = document.createElement('span');
+    name.textContent = c.name;
+    const count = document.createElement('span');
+    count.className = 'count';
+    count.textContent = collectionLabels(c.id).length;
+    btn.append(name, count);
+    btn.addEventListener('click', () => { currentCollection = c.id; chosen = []; renderCollections(); });
+    li.append(btn);
+    return li;
+  }));
+  $('collTitle').textContent = store.collections.find(c => c.id === currentCollection).name;
+  $('deleteColl').disabled = store.collections.length < 2;
+  renderGrid();
+}
+
+$('newColl').addEventListener('click', () => {
+  const name = (prompt('Name of the new collection:') || '').trim();
+  if (!name) return;
+  const c = { id: newId(), name };
+  store.collections.push(c);
+  currentCollection = c.id;
+  chosen = [];
+  saveStore();
+  renderCollections();
+});
+
+$('renameColl').addEventListener('click', () => {
+  const c = store.collections.find(c => c.id === currentCollection);
+  const name = (prompt('Rename collection:', c.name) || '').trim();
+  if (!name) return;
+  c.name = name;
+  saveStore();
+  renderCollections();
+});
+
+$('deleteColl').addEventListener('click', () => {
+  const c = store.collections.find(c => c.id === currentCollection);
+  const n = collectionLabels(c.id).length;
+  if (!confirm(`Delete the collection "${c.name}"${n ? ` and its ${n} label${n === 1 ? '' : 's'}` : ''}?`)) return;
+  store.collections = store.collections.filter(x => x.id !== c.id);
+  store.labels = store.labels.filter(l => l.collectionId !== c.id);
+  currentCollection = store.collections[0].id;
+  chosen = [];
+  saveStore();
+  renderCollections();
+});
+
+// ---- Label grid
+
+const batchOn = () => $('batchMode').checked;
+
+function renderGrid() {
+  const grid = $('labelGrid');
+  const labels = collectionLabels(currentCollection);
+  if (!labels.length) {
+    grid.replaceChildren(Object.assign(document.createElement('p'), {
+      className: 'empty', textContent: 'No labels here yet. Design one in the Designer tab and save it to this collection.',
+    }));
+  } else {
+    grid.replaceChildren(...labels.map(labelCard));
+  }
+  $('batchPanel').classList.toggle('hidden', !batchOn());
+  renderBatch();
+}
+
+function labelCard(label) {
+  const card = document.createElement('div');
+  card.className = 'label-card';
+  card.dataset.id = label.id;
+
+  const thumb = document.createElement('div');
+  thumb.className = 'thumb';
+  const img = document.createElement('img');
+  img.alt = label.name;
+  labelBlobFor(label.design).then(b => { img.src = URL.createObjectURL(b); }, () => { thumb.textContent = 'Preview unavailable'; });
+  thumb.append(img);
+
+  const name = document.createElement('div');
+  name.className = 'name';
+  name.textContent = label.name;
+  name.title = label.name;
+  const size = document.createElement('div');
+  size.className = 'size';
+  size.textContent = `${WIDTH_MM.toFixed(1)} × ${heightMm(label.design).toFixed(1)} mm`;
+  card.append(thumb, name, size);
+
+  if (batchOn()) {
+    card.classList.add('selectable');
+    card.classList.toggle('chosen', chosen.includes(label.id));
+    const pick = document.createElement('input');
+    pick.type = 'checkbox';
+    pick.className = 'pick';
+    pick.checked = chosen.includes(label.id);
+    pick.setAttribute('aria-label', `Select ${label.name}`);
+    card.prepend(pick);
+    card.addEventListener('click', e => { e.preventDefault(); toggleChosen(label.id); });
+    return card;
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const bt = button('Print via Bluetooth', async e => {
+    const b = e.currentTarget;
+    printing = true; updateButtons(); b.disabled = true;
+    try { await printViaBluetooth(await labelBlobFor(label.design), 1); }
+    catch (err) { setStatus($('printStatus'), err.message, true); }
+    printing = false; updateButtons();
+  });
+  bt.classList.add('primary', 'bt-print');
+  bt.disabled = printing || !device;
+  bt.title = device ? '' : 'Connect the Bluetooth printer first';
+  const edit = button('Edit', () => {
+    editingId = label.id;
+    setDesign(label.design);
+    renderSaveTargets();
+    $('saveCollection').value = label.collectionId;
+    setStatus($('saveStatus'), '');
+    showView('designer');
+  });
+  const move = document.createElement('select');
+  move.setAttribute('aria-label', 'Move to collection');
+  move.append(new Option('Move to…', ''), ...store.collections.filter(c => c.id !== label.collectionId).map(c => new Option(c.name, c.id)));
+  move.addEventListener('change', () => { label.collectionId = move.value; saveStore(); renderCollections(); });
+  move.classList.toggle('hidden', store.collections.length < 2);
+  const del = button('Delete', () => {
+    if (!confirm(`Delete the label "${label.name}"?`)) return;
+    store.labels = store.labels.filter(l => l !== label);
+    if (editingId === label.id) editingId = null;
+    saveStore();
+    renderCollections();
+  });
+  actions.append(bt, edit, move, del);
+  card.append(actions);
+  return card;
+}
+
+function button(text, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = text;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+// ---- Batch printing on A4: only as many labels as fit on one page
+
+const A4 = { w: 210, h: 297 };
+
+function pageSettings() {
+  return {
+    margin: Math.max(0, Number($('pageMargin').value) || 0),
+    gap: Math.max(0, Number($('pageGap').value) || 0),
+  };
+}
+
+/** Lays labels (given by height in mm) out in rows, left to right, top to bottom. */
+function layoutPage(heights) {
+  const { margin, gap } = pageSettings();
+  const cols = Math.max(0, Math.floor((A4.w - 2 * margin + gap) / (WIDTH_MM + gap)));
+  const availH = A4.h - 2 * margin;
+  const items = [];
+  let y = 0;
+  for (let i = 0; i < heights.length && cols > 0; i += cols) {
+    const row = heights.slice(i, i + cols);
+    const rowH = Math.max(...row);
+    row.forEach((h, c) => items.push({ x: margin + c * (WIDTH_MM + gap), y: margin + y, w: WIDTH_MM, h }));
+    y += rowH + gap;
+  }
+  const used = heights.length ? y - gap : 0;
+  return { cols, items, fits: cols > 0 && used <= availH + 1e-9, usedH: used, availH, margin, gap };
+}
+
+/** How many labels of this height fit on one page. */
+function capacityFor(h) {
+  const { margin, gap } = pageSettings();
+  const cols = Math.max(0, Math.floor((A4.w - 2 * margin + gap) / (WIDTH_MM + gap)));
+  const rows = Math.max(0, Math.floor((A4.h - 2 * margin + gap) / (h + gap)));
+  return cols * rows;
+}
+
+const chosenHeights = ids => ids.map(id => heightMm(labelById(id).design));
+
+function toggleChosen(id) {
+  const status = $('batchStatus');
+  if (chosen.includes(id)) {
+    chosen = chosen.filter(x => x !== id);
+    setStatus(status, '');
+  } else {
+    const label = labelById(id);
+    if (!layoutPage([...chosenHeights(chosen), heightMm(label.design)]).fits) {
+      const max = capacityFor(heightMm(label.design));
+      setStatus(status, max < 1
+        ? 'This label is bigger than an A4 page with these margins.'
+        : `The A4 page is full: at most ${max} label${max === 1 ? '' : 's'} of this size fit on one page. Deselect one to add another.`, true);
+      return;
+    }
+    chosen.push(id);
+    setStatus(status, '');
+  }
+  const card = document.querySelector(`.label-card[data-id="${id}"]`);
+  if (card) {
+    card.classList.toggle('chosen', chosen.includes(id));
+    card.querySelector('.pick').checked = chosen.includes(id);
+  }
+  renderBatch();
+}
+
+function renderBatch() {
+  if (!batchOn()) return;
+  // Drop selections that no longer fit (e.g. after the margin was increased)
+  while (chosen.length && !layoutPage(chosenHeights(chosen)).fits) chosen.pop();
+  for (const card of document.querySelectorAll('.label-card')) {
+    const on = chosen.includes(card.dataset.id);
+    card.classList.toggle('chosen', on);
+    card.querySelector('.pick').checked = on;
+  }
+
+  const layout = layoutPage(chosenHeights(chosen));
+  const refH = chosen.length ? Math.max(...chosenHeights(chosen)) : null;
+  const sizes = new Set(chosenHeights(chosen).map(h => h.toFixed(2)));
+  const max = refH ? capacityFor(refH) : 0;
+  const uniform = sizes.size <= 1;
+  $('batchInfo').textContent = chosen.length
+    ? `${chosen.length} selected · ${uniform ? `up to ${max} of this size fit` : 'mixed sizes'} on one A4 page`
+    : 'Select labels to fill the page.';
+  $('batchPrint').disabled = !chosen.length;
+
+  // A4 preview: filled slots, plus dashed ghosts for the room left when all labels are the same size
+  const scale = 210 / A4.w;
+  const box = $('a4Preview');
+  box.style.height = A4.h * scale + 'px';
+  const slots = [];
+  const place = (item, ghost, id) => {
+    const d = document.createElement('div');
+    d.className = 'slot' + (ghost ? ' ghost' : '');
+    d.style.cssText = `left:${item.x * scale}px;top:${item.y * scale}px;width:${item.w * scale}px;height:${item.h * scale}px`;
+    if (id) {
+      const img = document.createElement('img');
+      labelBlobFor(labelById(id).design).then(b => { img.src = URL.createObjectURL(b); });
+      d.append(img);
+    }
+    slots.push(d);
+  };
+  layout.items.forEach((item, i) => place(item, false, chosen[i]));
+  if (uniform && refH) {
+    const ghostLayout = layoutPage(Array(max).fill(refH));
+    ghostLayout.items.slice(chosen.length).forEach(item => place(item, true));
+  }
+  box.replaceChildren(...slots);
+}
+
+$('batchMode').addEventListener('change', () => { chosen = []; setStatus($('batchStatus'), ''); renderGrid(); });
+$('batchClear').addEventListener('click', () => { chosen = []; setStatus($('batchStatus'), ''); renderBatch(); });
+for (const id of ['pageMargin', 'pageGap']) $(id).addEventListener('input', renderBatch);
+
+$('batchPrint').addEventListener('click', async () => {
+  const status = $('batchStatus');
+  try {
+    const layout = layoutPage(chosenHeights(chosen));
+    if (!layout.fits) throw new Error('These labels do not fit on one A4 page.');
+    const blobs = await Promise.all(chosen.map(id => labelBlobFor(labelById(id).design)));
+    printA4(layout, blobs);
+    setStatus(status, 'Opening the print dialog… choose your printer there.');
+  } catch (e) {
+    setStatus(status, e.message, true);
+  }
+});
+
+function printA4(layout, blobs) {
+  const urls = blobs.map(b => URL.createObjectURL(b));
+  const imgs = layout.items.map((it, i) =>
+    `<img src="${urls[i]}" alt="" style="left:${it.x}mm;top:${it.y}mm;width:${it.w}mm;height:${it.h}mm">`).join('');
+  const doc = `<!doctype html><html><head><meta charset="utf-8"><title>Labels</title><style>
+    @page { size: A4; margin: 0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 210mm; height: 297mm; overflow: hidden; }
+    img { position: absolute; display: block; image-rendering: pixelated; }
+  </style></head><body>${imgs}</body></html>`;
+
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:0;height:0;border:0;';
+  const cleanup = () => { urls.forEach(URL.revokeObjectURL); iframe.remove(); };
+  iframe.addEventListener('load', () => {
+    iframe.contentWindow.addEventListener('afterprint', cleanup);
+    iframe.contentWindow.focus();
+    iframe.contentWindow.print();
+  });
+  document.body.append(iframe);
+  iframe.srcdoc = doc;
+  setTimeout(cleanup, 60000);   // in case this browser never fires afterprint
+}
+
 addInfoLine(INFO_PRESETS.packed(), false);
+updateQty();
 loadIcons();
 refreshPreview();
+renderSaveTargets();
 </script>
 </body>
 </html>

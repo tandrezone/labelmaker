@@ -94,6 +94,23 @@ php -S localhost:8000 -t examples
 
 then open <http://localhost:8000>, click **Connect printer**, pick the printer and click **Print**.
 
+### Desktop app (offline)
+
+[desktop/](desktop/) wraps the same page in an Electron window. It starts PHP's built-in server
+on a free port of 127.0.0.1 only, so nothing leaves the computer and no browser or internet is
+needed. Bluetooth printing works as in Chrome; if more than one printer is found you pick one
+from a dialog.
+
+```
+cd desktop
+npm install
+npm start            # uses php from PATH, or LABELMAKER_PHP
+```
+
+To build an installer (`npm run dist`) put a PHP build with GD and FreeType in `desktop/php/`
+(on Windows, the zip from <https://windows.php.net/download/> with `php.exe` at its top; enable
+`extension=gd` in its `php.ini`). It is copied into the app, so the target computer needs no PHP.
+
 ## Options
 
 | Option       | Meaning |
@@ -104,6 +121,9 @@ then open <http://localhost:8000>, click **Connect printer**, pick the printer a
 | `info-size`  | Size of the info lines in px; `auto` (default) = 18 px on a 128 px label. 3+ lines may go in two columns |
 | `info-gap`   | Space between the name and the info lines in px; `auto` (default) = 5 px on a 128 px label |
 | `info-spacing` | Extra space between the info lines in px; `auto` (default) = 20% of their size. A set value stays fixed when the lines shrink to fit |
+| `barcode`    | Code 128 barcode (1-32 letters, digits, punctuation) with its text under it, in a band at the bottom. Needs `height` 200 or more |
+| `footer`     | One small centred line at the bottom. Needs `height` 200 or more |
+| `elements`   | Free layout: a JSON list (or PHP array) of boxes placed anywhere, for several texts, icons, quantities, barcodes and QR codes. Each box has `t` (`text`, `icon`, `qty`, `barcode`, `qr`, `line`), `x` `y` `w` `h` in px, `v` (value), and optionally `a` (`l`/`c`/`r`), `s` (text size, default: fit the box), `b` (bold). A `qr` box (text up to 120 characters, level M) is drawn as large as fits the smaller side of its box, aligned by `a`. Replaces `text`, `qty`, `info`, `icon`, `barcode` and `footer`. 24 boxes max |
 | `date-format`| How dates are written, in PHP `date()` letters (default `d/m/Y`) |
 | `icon`       | An icon name (see [Icons](#icons): `apple`, `pumpkin`, `carrot`, `eco` ...); a PNG/JPG/GIF/WebP path; or a file name (no extension) from the icon folder |
 | `icon-mode`  | `alpha`, `luma` or `auto` (default): how a picture icon becomes black & white |
